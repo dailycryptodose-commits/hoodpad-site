@@ -571,7 +571,12 @@ function sellAmtWei() {
 }
 
 async function fillStatRail(t) {
-  const v = $("stVol"); if (v) v.textContent = (t.vol24 || 0).toFixed(3) + " ETH";
+  const v = $("stVol");
+  if (v) {
+    const eth = t.vol24 || 0;
+    v.textContent = eth.toFixed(3) + " ETH";
+    if (ethUsd) v.innerHTML = eth.toFixed(3) + " ETH <span style='color:var(--dim);font-size:12px'>($" + (eth * ethUsd).toFixed(2) + ")</span>";
+  }
   try {
     const hist = await (await fetch("/prices/" + t.addr.toLowerCase())).json();
     if (!hist || hist.length < 2) return;
