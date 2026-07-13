@@ -11,7 +11,23 @@
 <style>
   *{box-sizing:border-box;margin:0}
   :root{--bg:#0A0F0C;--panel:#0E1511;--line:#18251D;--line2:#1C2A21;--txt:#EAF5EC;--dim:#8FA898;--faint:#69806F;--green:#38E07B;--mint:#B8F5CF;--red:#FF6B6B;--amber:#FFB25C;--lime:#D8E05C}
-  body{min-height:100vh;background:var(--bg);color:var(--txt);font-family:'Sora',sans-serif;padding-bottom:80px}
+  body{min-height:100vh;background:linear-gradient(180deg,#0A0F0C 0%,#0C1912 100%) fixed;color:var(--txt);font-family:'Sora',sans-serif;padding-bottom:80px}
+  body[data-theme="light"]{
+    --bg:#F4FBF6;--panel:#FFFFFF;--line:#DCEDE1;--line2:#C8E3D0;--txt:#132A1C;--dim:#47684F;--faint:#7B9884;--green:#129E52;--mint:#0C6E3C;
+    background:linear-gradient(180deg,#FFFFFF 0%,#DCF2E3 55%,#C9EBD4 100%) fixed;
+  }
+  body[data-theme="light"] .nav{background:rgba(255,255,255,.92);border-color:var(--line)}
+  body[data-theme="light"] .heroCard{background:linear-gradient(160deg,#FFFFFF,#ECF8F0 60%)}
+  body[data-theme="light"] .field input,body[data-theme="light"] .search,body[data-theme="light"] .chip,body[data-theme="light"] .drop{background:#FFFFFF}
+  body[data-theme="light"] .miniBar{background:#DCEEE2}
+  body[data-theme="light"] .tabBtn.on{background:#E4F6EA;border-color:#A8D8B7;color:#0C6E3C}
+  body[data-theme="light"] .taxBadge.low{background:#E4F6EA;color:#0C6E3C}
+  body[data-theme="light"] .taxBadge.hot{background:#FDEEDD;color:#B26A12}
+  body[data-theme="light"] .taxBadge.mid{background:#F4F6DC;color:#7A7E12}
+  body[data-theme="light"] .modal{background:#FFFFFF}
+  body[data-theme="light"] .toast{background:#E4F6EA;border-color:#A8D8B7;color:#0C6E3C}
+  body[data-theme="light"] svg circle[stroke="#16211B"]{stroke:#DCEEE2}
+  body[data-theme="light"] .btn.sellBtn{background:#FCE9E9;color:#B03030;border-color:#EFC9C9}
   button{font-family:'Sora',sans-serif;cursor:pointer}
   input{font-family:'JetBrains Mono',monospace}
 
@@ -139,7 +155,8 @@
   <a href="/" class="logo" style="display:flex;align-items:center;gap:9px;text-decoration:none;color:inherit"><img src="/logo.png" width="28" height="28" alt="" style="border-radius:8px">HOOD<em>PAD</em></a>
   <input id="searchBar" class="search" placeholder="search name, ticker, or paste CA…" oninput="doSearch(this.value)" onkeydown="if(event.key==='Enter')searchGo(this.value)">
   <div class="navBtns">
-    <a href="/analytics" class="btn ghost" style="text-decoration:none">📊</a>
+    <a href="/analytics" class="btn ghost" style="text-decoration:none">Analytics</a>
+    <button class="btn ghost" id="themeBtn" onclick="toggleTheme()" title="theme">☀</button>
     <button class="btn ghost" id="connectBtn" onclick="connect()">Connect wallet</button>
     <button class="btn" onclick="openLaunch()">+ Launch a token</button>
   </div>
@@ -255,6 +272,16 @@ async function ethPrice() {
   ];
   for (const [u, f] of srcs) { try { const r = await fetch(u); ethUsd = f(await r.json()); return; } catch (e) {} }
 }
+
+const savedTheme = (() => { try { return localStorage.getItem("hp-theme") } catch (e) { return null } })() || "dark";
+document.body.dataset.theme = savedTheme;
+function toggleTheme() {
+  const t = document.body.dataset.theme === "dark" ? "light" : "dark";
+  document.body.dataset.theme = t;
+  try { localStorage.setItem("hp-theme", t); } catch (e) {}
+  $("themeBtn").textContent = t === "dark" ? "☀" : "☾";
+}
+window.addEventListener("DOMContentLoaded", () => { $("themeBtn").textContent = savedTheme === "dark" ? "☀" : "☾"; });
 
 const pagePath = location.pathname.match(/^\/t\/(0x[0-9a-fA-F]{40})$/);
 const pageToken = pagePath ? pagePath[1] : null;
