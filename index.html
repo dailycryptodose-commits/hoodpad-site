@@ -185,6 +185,7 @@
     <button class="tabBtn on" data-tab="trending" onclick="setTab('trending')">🔥 Trending</button>
     <button class="tabBtn" data-tab="new" onclick="setTab('new')">✨ New</button>
     <button class="tabBtn" data-tab="bonding" onclick="setTab('bonding')">⏳ Bonding now</button>
+    <button class="tabBtn" data-tab="graduated" onclick="setTab('graduated')">🎓 Graduated</button>
   </div>
 
   <div class="grid" id="grid"></div>
@@ -207,7 +208,7 @@
   <div class="modal">
     <button class="closeX" onclick="closeModals()">✕</button>
     <div class="mTitle">Launch a token</div>
-    <div class="mSub">live in one transaction · <span style="white-space:nowrap">creation fee <span id="feeShow">…</span> ETH</span></div>
+    <div class="mSub">live in one transaction · <span style="white-space:nowrap">creation fee <span id="feeShow">…</span> ETH</span><br><span style="color:var(--green)">you earn 50% of every trade fee on your token — forever</span></div>
     <div class="field"><label>Name</label><input id="lName" placeholder="Sherwood" maxlength="32"></div>
     <div class="field"><label>Ticker</label><input id="lTick" placeholder="SHER" maxlength="10" style="text-transform:uppercase"></div>
     <div class="field"><label>Your first buy (ETH, optional)</label><input id="lBuy" placeholder="0.01" inputmode="decimal" oninput="quoteLaunchBuy()"></div>
@@ -637,6 +638,7 @@ function render() {
   if (tab === "trending") list.sort((a, b) => b.realEth - a.realEth);
   if (tab === "new") list.sort((a, b) => b.i - a.i);
   if (tab === "bonding") list = list.filter((t) => !t.migrated).sort((a, b) => b.prog - a.prog);
+  if (tab === "graduated") list = list.filter((t) => t.migrated).sort((a, b) => b.mcapUsd - a.mcapUsd);
 
   $("empty").style.display = tokens.length ? "none" : "block";
   g.innerHTML = list.map((t) => `
