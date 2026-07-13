@@ -155,6 +155,7 @@ async function buildTokenCache() {
         created: st.created || (prices[a] && prices[a][0] ? prices[a][0][0] : null),
         trades: st.trades || 0,
         creatorFees: cFees.toString(),
+        vol24: (st.t24 || []).filter((x) => x[0] > Date.now() - 86_400_000).reduce((s, x) => s + BigInt(x[1]), 0n).toString(),
       };
     }));
     tokenCache = { ts: Math.floor(Date.now() / 1000), tokens: items };
@@ -200,6 +201,17 @@ const padIface = new ethers.Interface([
 ]);
 
 function addWei(a, b) { return (BigInt(a) + b).toString(); }
+function pushT24(tok, wei) {
+  const k = tok.toLowerCase();
+  if (!stats.perToken[k]) stats.perToken[k] = { vol: "0", trades: 0 };
+  if (!stats.perToken[k].t24) stats.perToken[k].t24 = [];
+  const arr = stats.perToken[k].t24;
+  arr.push([Date.now(), wei.toString()]);
+  const cutoff = Date.now() - 86_400_000;
+  while (arr.length && arr[0][0] < cutoff) arr.shift();
+  if (arr.length > 800) arr.splice(0, arr.length - 800);
+}
+
 function bump(tok, wei) {
   const k = tok.toLowerCase();
   if (!stats.perToken[k]) stats.perToken[k] = { vol: "0", trades: 0 };
@@ -243,6 +255,7 @@ async function indexStats() {
           if (Object.keys(stats.traders).length < 100000) stats.traders[p.args.buyer.toLowerCase()] = 1;
           stats.traderVol[p.args.buyer.toLowerCase()] = addWei(stats.traderVol[p.args.buyer.toLowerCase()] || "0", p.args.ethIn);
           bump(p.args.token, p.args.ethIn);
+          pushT24(p.args.token, p.args.ethIn);
         }
         if (p.name === "Sell") {
           stats.sells++;
@@ -252,6 +265,7 @@ async function indexStats() {
           if (Object.keys(stats.traders).length < 100000) stats.traders[p.args.seller.toLowerCase()] = 1;
           stats.traderVol[p.args.seller.toLowerCase()] = addWei(stats.traderVol[p.args.seller.toLowerCase()] || "0", p.args.ethOut);
           bump(p.args.token, p.args.ethOut);
+          pushT24(p.args.token, p.args.ethOut);
         }
       }
       // holder balances: Transfer events for every known token in this range

@@ -135,7 +135,12 @@
   .back{font-family:'JetBrains Mono';font-size:12px;color:var(--dim);text-decoration:none;display:inline-block;margin-bottom:18px}
   .back:hover{color:var(--mint)}
   .tpGrid{display:grid;grid-template-columns:1fr;gap:14px}
-  @media(min-width:860px){.tpGrid{grid-template-columns:1.6fr 1fr}}
+  @media(min-width:860px){.tpGrid{grid-template-columns:185px 1.5fr 1fr}}
+  .statRail{display:flex;flex-direction:column;gap:10px}
+  .statBox{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+  .statBox .lbl{display:block;font-size:10.5px;color:var(--faint);margin-bottom:3px}
+  .statBox .val{font-family:'JetBrains Mono';font-weight:700;font-size:15px}
+  @media(max-width:859px){.statRail{flex-direction:row;flex-wrap:wrap}.statBox{flex:1;min-width:100px}}
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:18px}
   .chartWrap{position:relative}
   .chartWrap svg{width:100%;height:240px;display:block}
@@ -419,6 +424,14 @@ async function renderTokenPage(soft) {
       <div class="taxBadge low" style="margin-left:auto">${t.migrated ? "migrated" : t.prog.toFixed(1) + "% bonded"}</div></div>
       <div class="tpAddr"><span onclick="navigator.clipboard.writeText('${t.addr}');toast('address copied')">${t.addr} ⧉</span> · <a class="explorer" href="${EXPLORER}/address/${t.addr}" target="_blank" rel="noopener">view on explorer ↗</a></div>
       <div class="tpGrid">
+        <div class="statRail">
+          <div class="statBox"><span class="lbl">24h volume</span><span class="val" id="stVol">…</span></div>
+          <div class="statBox"><span class="lbl">5m change</span><span class="val" id="stC5">…</span></div>
+          <div class="statBox"><span class="lbl">1h change</span><span class="val" id="stC60">…</span></div>
+          <div class="statBox"><span class="lbl">6h change</span><span class="val" id="stC360">…</span></div>
+          <div class="statBox"><span class="lbl">total supply</span><span class="val">1B</span></div>
+          <div class="statBox"><span class="lbl">holders</span><span class="val" id="stHolders">…</span></div>
+        </div>
         <div class="panel">
           <div class="chartWrap"><svg id="chartSvg" viewBox="0 0 600 240" preserveAspectRatio="none"></svg><div class="chartEmpty" id="chartEmpty" style="display:none">chart starts filling from launch — check back soon</div></div>
           <div class="heroStats" style="margin-top:14px;flex-wrap:wrap;gap:16px">
@@ -438,10 +451,13 @@ async function renderTokenPage(soft) {
     drawChart(t);
     loadTrades(t);
     loadHolders(t);
+    fillStatRail(t);
   } else {
     const el = (id) => $(id);
     if (el("tpMcap")) { el("tpMcap").textContent = fmtUsd(t.mcapUsd); el("tpRaised").textContent = t.realEth.toFixed(3) + " ETH"; el("tpBonded").textContent = t.migrated ? "✓" : t.prog.toFixed(1) + "%"; }
     drawChart(t);
+    fillStatRail(t);
+    loadHolders(t);
   }
   $("tpMcap").textContent = fmtUsd(t.mcapUsd);
   $("tpRaised").textContent = t.realEth.toFixed(3) + " ETH";
@@ -513,6 +529,30 @@ function sellAmtWei() {
   const v = $("sellAmt").value;
   if (window._exactSell && window._exactSell.v === v) return window._exactSell.amt;
   return E.parseEther((parseFloat(v) || 0).toString());
+}
+
+async function fillStatRail(t) {
+  const v = $("stVol"); if (v) v.textContent = (t.vol24 || 0).toFixed(3) + " ETH";
+  try {
+    const hist = await (await fetch("/prices/" + t.addr.toLowerCase())).json();
+    if (!hist || hist.length < 2) return;
+    const nowP = Number(E.formatEther(BigInt(hist[hist.length - 1][1])));
+    const nowTs = hist[hist.length - 1][0];
+    const at = (mins) => {
+      const cut = nowTs - mins * 60;
+      const p = hist.find((x) => x[0] >= cut);
+      return p ? Number(E.formatEther(BigInt(p[1]))) : null;
+    };
+    const put = (id, mins) => {
+      const el = $(id); if (!el) return;
+      const then = at(mins);
+      if (!then || hist[0][0] > nowTs - mins * 60 + 90) { el.textContent = "—"; el.style.color = ""; return; }
+      const ch = (nowP / then - 1) * 100;
+      el.textContent = (ch >= 0 ? "+" : "") + ch.toFixed(1) + "%";
+      el.style.color = ch >= 0 ? "var(--green)" : "var(--red)";
+    };
+    put("stC5", 5); put("stC60", 60); put("stC360", 360);
+  } catch (e) {}
 }
 
 function openEditMetaPage() { $("tradeModal").classList.add("open"); openEditMeta(); }
@@ -599,6 +639,7 @@ async function loadHolders(t) {
   try {
     const d = await (await fetch("/holders/" + t.addr.toLowerCase())).json();
     const c = $("tpHolders"); if (c) c.textContent = d.count;
+    const c2 = $("stHolders"); if (c2) c2.textContent = d.count;
     const el = $("tpTop"); if (!el) return;
     el.innerHTML = d.top.length
       ? `<div style="font-size:12px;color:var(--faint);margin:10px 0 4px">top holders</div>` + d.top.map((h, i) => `
@@ -638,7 +679,8 @@ async function loadTokens() {
                  realEth: Number(E.formatEther(BigInt(t.realEth))), priceEth,
                  mcapUsd: priceEth * 1e9 * ethUsd, prog: t.prog / 100,
                  creator: t.creator, meta: t.meta || {}, created: t.created, trades: t.trades,
-                 creatorFees: t.creatorFees ? Number(E.formatEther(BigInt(t.creatorFees))) : 0 };
+                 creatorFees: t.creatorFees ? Number(E.formatEther(BigInt(t.creatorFees))) : 0,
+                 vol24: t.vol24 ? Number(E.formatEther(BigInt(t.vol24))) : 0 };
       });
       render();
       return;
