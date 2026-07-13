@@ -382,6 +382,7 @@ async function init() {
   reader = new E.JsonRpcProvider(RPC);
   pad = new E.Contract(PAD_ADDR, PAD_ABI, reader);
   await ethPrice();
+  reconnectSilently();
   try { $("feeShow").textContent = E.formatEther(await pad.creationFee()); } catch (e) {}
   await loadTokens();
   if (pageToken) {
@@ -711,6 +712,22 @@ async function loadFeed() {
 }
 
 // ---- wallet ----
+async function reconnectSilently() {
+  if (!window.ethereum) return;
+  try {
+    const accounts = await window.ethereum.request({ method: "eth_accounts" }); // no popup
+    if (!accounts || !accounts.length) return;
+    const bp = new E.BrowserProvider(window.ethereum);
+    signer = await bp.getSigner();
+    wallet = await signer.getAddress();
+    $("connectBtn").textContent = short(wallet);
+    if (pageToken && currentToken) fillTradePanel(currentToken);
+  } catch (e) {}
+}
+if (window.ethereum) {
+  window.ethereum.on && window.ethereum.on("accountsChanged", () => location.reload());
+}
+
 async function connect() {
   if (!window.ethereum) { toast("no wallet extension found — install MetaMask"); return; }
   const bp = new E.BrowserProvider(window.ethereum);
