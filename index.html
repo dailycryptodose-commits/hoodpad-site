@@ -43,6 +43,10 @@
   .feedInner{display:flex;gap:28px;animation:mq 30s linear infinite;padding-left:100%}
   @keyframes mq{from{transform:translateX(0)}to{transform:translateX(-100%)}}
   .buyC{color:var(--green)}.sellC{color:var(--red)}
+  .airdrop{display:block;text-align:center;padding:10px 16px;font-size:13px;color:#06130B;text-decoration:none;font-weight:600;
+    background:linear-gradient(90deg,#38E07B,#B8F5CF,#38E07B);background-size:200% 100%;animation:shimmer 5s linear infinite}
+  .airdrop b{font-family:'Unbounded';font-size:12px;letter-spacing:.5px}
+  @keyframes shimmer{from{background-position:0% 0}to{background-position:200% 0}}
 
   .wrap{max-width:1080px;margin:0 auto}
   .hero{padding:26px 18px 8px}
@@ -161,6 +165,8 @@
     <button class="btn" onclick="openLaunch()">+ Launch a token</button>
   </div>
 </div>
+
+<a href="/season" class="airdrop">🪂 AIRDROP INCOMING — <b>SEASON 1 IS LIVE</b> · trade &amp; launch to earn points →</a>
 
 <div class="feed" id="feed" style="display:none"><div class="feedInner" id="feedInner"></div></div>
 
@@ -286,6 +292,38 @@ window.addEventListener("DOMContentLoaded", () => { $("themeBtn").textContent = 
 const pagePath = location.pathname.match(/^\/t\/(0x[0-9a-fA-F]{40})$/);
 const pageToken = pagePath ? pagePath[1] : null;
 const statsPage = location.pathname === "/analytics";
+const seasonPage = location.pathname === "/season";
+
+async function renderSeason() {
+  document.getElementById("homeView").style.display = "none";
+  document.querySelector(".feed").style.display = "none";
+  const d = await (await fetch("/points")).json();
+  const me = wallet ? d.board.find((r) => r.a === wallet.toLowerCase()) : null;
+  const myRank = me ? d.board.indexOf(me) + 1 : null;
+  $("statsView").style.display = "block";
+  $("statsView").innerHTML = `
+    <a class="back" href="/">← all tokens</a>
+    <div class="tpName" style="margin-bottom:6px">🪂 Season 1</div>
+    <div style="color:var(--dim);font-size:13.5px;margin-bottom:18px;line-height:1.6">
+      Earn points now, get rewarded later. <b style="color:var(--green)">1,000 pts per ETH traded</b> · <b style="color:var(--green)">500 pts per token launched</b>.<br>
+      Airdrop details: TBA. Points are tracked automatically — just trade.
+    </div>
+    <div class="panel" style="margin-bottom:14px;text-align:center">
+      ${wallet
+        ? me
+          ? `<div style="font-size:11px;color:var(--faint)">your points</div><div style="font-family:'Unbounded';font-weight:700;font-size:28px;color:var(--green)">${me.p.toLocaleString()}</div><div style="font-family:'JetBrains Mono';font-size:12px;color:var(--dim)">rank #${myRank}</div>`
+          : `<div style="color:var(--dim);font-size:13px">no points yet — make your first trade 🏹</div>`
+        : `<button class="btn" onclick="connect().then(renderSeason)">Connect wallet to see your points</button>`}
+    </div>
+    <div class="panel">
+      <div style="font-size:12px;color:var(--faint);margin-bottom:4px">leaderboard</div>
+      ${d.board.length ? d.board.slice(0, 25).map((r, i) => `
+        <div class="trade"><span>#${i + 1}</span>
+        <a href="${EXPLORER}/address/${r.a}" target="_blank" rel="noopener">${short(r.a)}</a>
+        <span style="color:var(--green);font-weight:700">${r.p.toLocaleString()} pts</span></div>`).join("")
+        : `<div style="color:var(--faint);font-size:13px;padding:12px 0">nobody yet — first trade takes #1</div>`}
+    </div>`;
+}
 
 async function renderStats() {
   document.getElementById("homeView").style.display = "none";
@@ -343,6 +381,9 @@ async function init() {
   } else if (statsPage) {
     renderStats();
     setInterval(renderStats, 30000);
+  } else if (seasonPage) {
+    renderSeason();
+    setInterval(renderSeason, 30000);
   } else {
     loadFeed();
     setInterval(loadTokens, 20000);
@@ -483,6 +524,8 @@ async function loadTrades(t) {
 async function loadTokens() {
   try {
     try { metaMap = await (await fetch("/meta")).json(); } catch (e) {}
+    let statMap = {};
+    try { statMap = (await (await fetch("/stats")).json()).perToken || {}; } catch (e) {}
     const n = Number(await pad.tokenCount());
     const addrs = await Promise.all([...Array(n)].map((_, i) => pad.allTokens(i)));
     tokens = await Promise.all(addrs.map(async (a, i) => {
@@ -494,13 +537,23 @@ async function loadTokens() {
       const mcapUsd = priceEth * 1e9 * ethUsd;
       return { addr: a, i, name, symbol, migrated: curve.migrated, realEth: Number(E.formatEther(curve.realEth)),
                priceEth, mcapUsd, prog: Number(prog) / 100,
-               creator: curve.creator, meta: metaMap[a.toLowerCase()] || {} };
+               creator: curve.creator, meta: metaMap[a.toLowerCase()] || {},
+               created: (statMap[a.toLowerCase()] || {}).created || null,
+               trades: (statMap[a.toLowerCase()] || {}).trades || 0 };
     }));
     render();
   } catch (e) { console.error(e); }
 }
 
 function taxClass(t) { return t >= 10 ? "hot" : t > 3.5 ? "mid" : "low"; }
+function fmtAge(ts) {
+  if (!ts) return "new";
+  const s = Math.max(1, Math.floor(Date.now() / 1000 - ts));
+  if (s < 60) return s + "s ago";
+  if (s < 3600) return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
+  return Math.floor(s / 86400) + "d ago";
+}
 function hueOf(s) { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) % 360; return h; }
 function avatarHtml(t, size) {
   const fallback = `this.outerHTML='<div class=&quot;avatar&quot; style=&quot;width:${size}px;height:${size}px;background:linear-gradient(135deg,hsl(${hueOf(t.symbol)} 70% 18%),hsl(${hueOf(t.symbol)} 80% 32%))&quot;>${t.symbol.slice(0,2)}</div>'`;
@@ -533,7 +586,8 @@ function render() {
       </div>
       <div class="cardStats">
         <div><span class="lbl">mcap</span><span class="val">${fmtUsd(t.mcapUsd)}</span></div>
-        <div><span class="lbl">raised</span><span class="val">${t.realEth.toFixed(3)} ETH</span></div>
+        <div><span class="lbl">created</span><span class="val">${fmtAge(t.created)}</span></div>
+        <div><span class="lbl">trades</span><span class="val">${t.trades}</span></div>
       </div>
       <div class="bondRow">
         <div class="miniBar wide"><div style="width:${Math.min(100, t.prog)}%"></div></div>

@@ -129,8 +129,11 @@ app.get("/t/:token", (req, res) => res.sendFile(path.join(__dirname, "index.html
 
 // ---- analytics indexer ----
 const STATS_FILE = path.join(DATA_DIR, "stats.json");
-let stats = { lastBlock: 0, vol: "0", fees: "0", buys: 0, sells: 0, launches: 0, migrations: 0, traders: {}, daily: {}, perToken: {} };
+let stats = { lastBlock: 0, vol: "0", fees: "0", buys: 0, sells: 0, launches: 0, migrations: 0, traders: {}, daily: {}, perToken: {}, traderVol: {}, creatorLaunches: {} };
 try { stats = Object.assign(stats, JSON.parse(fs.readFileSync(STATS_FILE, "utf8"))); } catch (e) {}
+if (!stats.traderVol || !stats.creatorLaunches) { // points upgrade -> full reindex
+  stats = { lastBlock: 0, vol: "0", fees: "0", buys: 0, sells: 0, launches: 0, migrations: 0, traders: {}, daily: {}, perToken: {}, traderVol: {}, creatorLaunches: {} };
+}
 
 const padIface = new ethers.Interface([
   "event TokenCreated(address indexed token, address indexed creator, string name, string symbol)",
@@ -160,7 +163,17 @@ async function indexStats() {
       for (const log of logs) {
         let p; try { p = padIface.parseLog(log); } catch (e) { continue; }
         if (!p) continue;
-        if (p.name === "TokenCreated") stats.launches++;
+        if (p.name === "TokenCreated") {
+          stats.launches++;
+          try {
+            const b = await provider.getBlock(log.blockNumber);
+            const k = p.args.token.toLowerCase();
+            if (!stats.perToken[k]) stats.perToken[k] = { vol: "0", trades: 0 };
+            stats.perToken[k].created = b.timestamp;
+          } catch (e) {}
+          const cr = p.args.creator.toLowerCase();
+          stats.creatorLaunches[cr] = (stats.creatorLaunches[cr] || 0) + 1;
+        }
         if (p.name === "Migrated") stats.migrations++;
         if (p.name === "Buy") {
           stats.buys++;
@@ -168,6 +181,7 @@ async function indexStats() {
           stats.fees = addWei(stats.fees, p.args.ethIn / 100n);
           stats.daily[day] = addWei(stats.daily[day] || "0", p.args.ethIn);
           if (Object.keys(stats.traders).length < 100000) stats.traders[p.args.buyer.toLowerCase()] = 1;
+          stats.traderVol[p.args.buyer.toLowerCase()] = addWei(stats.traderVol[p.args.buyer.toLowerCase()] || "0", p.args.ethIn);
           bump(p.args.token, p.args.ethIn);
         }
         if (p.name === "Sell") {
@@ -176,6 +190,7 @@ async function indexStats() {
           stats.fees = addWei(stats.fees, p.args.taxEth);
           stats.daily[day] = addWei(stats.daily[day] || "0", p.args.ethOut);
           if (Object.keys(stats.traders).length < 100000) stats.traders[p.args.seller.toLowerCase()] = 1;
+          stats.traderVol[p.args.seller.toLowerCase()] = addWei(stats.traderVol[p.args.seller.toLowerCase()] || "0", p.args.ethOut);
           bump(p.args.token, p.args.ethOut);
         }
       }
@@ -192,6 +207,10 @@ setInterval(indexStats, 60_000);
 indexStats();
 
 app.get("/stats", (req, res) => {
+  for (const [k, arr] of Object.entries(prices)) {
+    if (arr.length && stats.perToken[k] && !stats.perToken[k].created) stats.perToken[k].created = arr[0][0];
+    if (arr.length && !stats.perToken[k]) stats.perToken[k] = { vol: "0", trades: 0, created: arr[0][0] };
+  }
   res.json({
     vol: stats.vol, buys: stats.buys, sells: stats.sells,
     launches: stats.launches, migrations: stats.migrations,
@@ -201,3 +220,18 @@ app.get("/stats", (req, res) => {
 });
 
 app.get("/analytics", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+
+// season 1 points: 1000 pts per ETH traded + 500 per token launched
+app.get("/points", (req, res) => {
+  const pts = {};
+  for (const [a, wei] of Object.entries(stats.traderVol || {})) {
+    pts[a] = (pts[a] || 0) + Number(BigInt(wei) / 1000000000000000n) / 1000; // eth with 3dp
+  }
+  for (const a of Object.keys(pts)) pts[a] = Math.floor(pts[a] * 1000);
+  for (const [a, n] of Object.entries(stats.creatorLaunches || {})) {
+    pts[a] = (pts[a] || 0) + n * 500;
+  }
+  const board = Object.entries(pts).map(([a, p]) => ({ a, p })).sort((x, y) => y.p - x.p).slice(0, 100);
+  res.json({ board, season: 1 });
+});
+app.get("/season", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
