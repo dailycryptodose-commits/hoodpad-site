@@ -136,11 +136,10 @@
   .back:hover{color:var(--mint)}
   .tpGrid{display:grid;grid-template-columns:1fr;gap:14px}
   @media(min-width:1000px){
-    .tpGrid{grid-template-columns:minmax(0,1fr) 400px;gap:16px;grid-template-areas:"chart trade" "rail trade"}
+    .tpGrid{grid-template-columns:195px minmax(0,1fr) 400px;gap:16px;grid-template-areas:"rail chart trade"}
     .chartPanel{grid-area:chart}
     #tpPanel{grid-area:trade;align-self:start}
-    .statRail{grid-area:rail;flex-direction:row;flex-wrap:wrap}
-    .statRail .statBox{flex:1;min-width:130px}
+    .statRail{grid-area:rail;align-self:start}
   }
   .statRail{display:flex;flex-direction:column;gap:10px}
   .statBox{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
@@ -149,7 +148,7 @@
   @media(max-width:859px){.statRail{flex-direction:row;flex-wrap:wrap}.statBox{flex:1;min-width:100px}}
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:18px}
   .chartWrap{position:relative}
-  .chartWrap svg{width:100%;height:560px;display:block}
+  .chartWrap svg{width:100%;height:440px;display:block}
   .chartEmpty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--faint);font-size:13px}
   .trades{margin-top:14px}
   .trade{display:flex;justify-content:space-between;font-family:'JetBrains Mono';font-size:12px;padding:8px 0;border-bottom:1px solid var(--line)}
