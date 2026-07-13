@@ -117,6 +117,9 @@
   .btn.sellBtn{background:#241214;color:#FFB0B0;box-shadow:none;border:1px solid #3A1D20}
   .quote{font-family:'JetBrains Mono';font-size:12px;color:var(--dim);margin:-6px 0 14px;min-height:16px}
   .quickLbl{font-size:10.5px;color:var(--faint);letter-spacing:1px;text-transform:uppercase;margin:-4px 0 6px}
+  .gradBar{position:relative;height:30px;background:var(--panel);border:1px solid var(--line2);border-radius:99px;overflow:hidden;margin:2px 0 18px}
+  .gradFill{position:absolute;inset:0;width:0%;background:linear-gradient(90deg,#3B7F0C,#5FBE12,#CBEF8F);border-radius:99px;transition:width 1.2s cubic-bezier(.2,.8,.2,1)}
+  .gradTxt{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:'JetBrains Mono';font-size:12px;font-weight:700;color:var(--txt);text-shadow:0 1px 4px rgba(0,0,0,.45)}
   .note{font-size:12px;color:var(--faint);margin-top:12px;line-height:1.5}
   .closeX{float:right;background:none;border:none;color:var(--faint);font-size:20px}
   .status{font-family:'JetBrains Mono';font-size:12px;margin-top:12px;min-height:16px;word-break:break-all}
@@ -433,6 +436,7 @@ async function renderTokenPage(soft) {
       </div>
       <div class="taxBadge low" style="margin-left:auto">${t.migrated ? "migrated" : t.prog.toFixed(1) + "% bonded"}</div></div>
       <div class="tpAddr"><span onclick="navigator.clipboard.writeText('${t.addr}');toast('address copied')">${t.addr} ⧉</span> · <a class="explorer" href="${EXPLORER}/address/${t.addr}" target="_blank" rel="noopener">view on explorer ↗</a></div>
+      <div class="gradBar"><div class="gradFill" id="gradFill" style="width:${t.migrated ? 100 : Math.min(100, t.prog)}%"></div><span class="gradTxt" id="gradTxt">${t.migrated ? "🎓 graduated — trading on uniswap" : "🎓 " + t.prog.toFixed(1) + "% to graduation · migrates to uniswap at 100%"}</span></div>
       <div class="tpGrid">
         <div class="statRail">
           <div class="statBox"><span class="lbl">24h volume</span><span class="val" id="stVol">…</span></div>
@@ -467,6 +471,9 @@ async function renderTokenPage(soft) {
     drawChart(t);
     fillStatRail(t);
     loadHolders(t);
+    const gf = $("gradFill"), gt = $("gradTxt");
+    if (gf) gf.style.width = (t.migrated ? 100 : Math.min(100, t.prog)) + "%";
+    if (gt) gt.textContent = t.migrated ? "🎓 graduated — trading on uniswap" : "🎓 " + t.prog.toFixed(1) + "% to graduation · migrates to uniswap at 100%";
   }
   $("tpMcap").textContent = fmtUsd(t.mcapUsd);
   $("tpRaised").textContent = t.realEth.toFixed(3) + " ETH";
