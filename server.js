@@ -179,6 +179,10 @@ try { stats = Object.assign(stats, JSON.parse(fs.readFileSync(STATS_FILE, "utf8"
 if (!stats.traderVol || !stats.creatorLaunches) { // points upgrade -> full reindex
   stats = { lastBlock: 0, vol: "0", fees: "0", buys: 0, sells: 0, launches: 0, migrations: 0, traders: {}, daily: {}, perToken: {}, traderVol: {}, creatorLaunches: {} };
 }
+if (!stats.holders || !stats.tokenList) { // holders upgrade -> full reindex
+  stats = { lastBlock: 0, vol: "0", fees: "0", buys: 0, sells: 0, launches: 0, migrations: 0, traders: {}, daily: {}, perToken: {}, traderVol: {}, creatorLaunches: {}, holders: {}, tokenList: [], creatorOf: {} };
+}
+const TRANSFER_TOPIC = ethers.id("Transfer(address,address,uint256)");
 
 const padIface = new ethers.Interface([
   "event TokenCreated(address indexed token, address indexed creator, string name, string symbol)",
@@ -218,6 +222,9 @@ async function indexStats() {
           } catch (e) {}
           const cr = p.args.creator.toLowerCase();
           stats.creatorLaunches[cr] = (stats.creatorLaunches[cr] || 0) + 1;
+          const tk = p.args.token.toLowerCase();
+          if (!stats.tokenList.includes(tk)) stats.tokenList.push(tk);
+          stats.creatorOf[tk] = cr;
         }
         if (p.name === "Migrated") stats.migrations++;
         if (p.name === "Buy") {
@@ -238,6 +245,26 @@ async function indexStats() {
           stats.traderVol[p.args.seller.toLowerCase()] = addWei(stats.traderVol[p.args.seller.toLowerCase()] || "0", p.args.ethOut);
           bump(p.args.token, p.args.ethOut);
         }
+      }
+      // holder balances: Transfer events for every known token in this range
+      for (const tk of stats.tokenList) {
+        try {
+          const tlogs = await provider.getLogs({ address: tk, topics: [TRANSFER_TOPIC], fromBlock: from, toBlock: to });
+          if (!stats.holders[tk]) stats.holders[tk] = {};
+          const bal = stats.holders[tk];
+          for (const l of tlogs) {
+            const fromA = ("0x" + l.topics[1].slice(26)).toLowerCase();
+            const toA = ("0x" + l.topics[2].slice(26)).toLowerCase();
+            const v = BigInt(l.data);
+            if (fromA !== "0x0000000000000000000000000000000000000000") {
+              bal[fromA] = (BigInt(bal[fromA] || "0") - v).toString();
+              if (BigInt(bal[fromA]) <= 0n) delete bal[fromA];
+            }
+            if (toA !== "0x0000000000000000000000000000000000000000") {
+              bal[toA] = (BigInt(bal[toA] || "0") + v).toString();
+            }
+          }
+        } catch (e) {}
       }
       from = to + 1;
     }
@@ -280,3 +307,17 @@ app.get("/points", (req, res) => {
   res.json({ board, season: 1 });
 });
 app.get("/season", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+
+const SUPPLY_WEI = 10n ** 27n; // 1B * 1e18
+app.get("/holders/:token", (req, res) => {
+  const t = (req.params.token || "").toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(t)) return res.status(400).json({ count: 0, top: [] });
+  const bal = (stats.holders || {})[t] || {};
+  const padA = PAD.toLowerCase(), dead = "0x000000000000000000000000000000000000dead";
+  const dev = (stats.creatorOf || {})[t] || null;
+  const entries = Object.entries(bal)
+    .filter(([a, v]) => BigInt(v) > 0n && a !== padA && a !== dead)
+    .map(([a, v]) => ({ a, pct: Number((BigInt(v) * 10000n) / SUPPLY_WEI) / 100, dev: a === dev }))
+    .sort((x, y) => y.pct - x.pct);
+  res.json({ count: entries.length, top: entries.slice(0, 10) });
+});

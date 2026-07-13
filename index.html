@@ -409,11 +409,14 @@ async function renderTokenPage(soft) {
       <div class="tpGrid">
         <div class="panel">
           <div class="chartWrap"><svg id="chartSvg" viewBox="0 0 600 240" preserveAspectRatio="none"></svg><div class="chartEmpty" id="chartEmpty" style="display:none">chart starts filling from launch — check back soon</div></div>
-          <div class="heroStats" style="margin-top:14px">
+          <div class="heroStats" style="margin-top:14px;flex-wrap:wrap;gap:16px">
             <div><span class="lbl">mcap</span><span class="val" id="tpMcap"></span></div>
             <div><span class="lbl">raised</span><span class="val" id="tpRaised"></span></div>
             <div><span class="lbl">bonded</span><span class="val" id="tpBonded"></span></div>
+            <div><span class="lbl">created</span><span class="val">${fmtAge(t.created)}</span></div>
+            <div><span class="lbl">holders</span><span class="val" id="tpHolders">…</span></div>
           </div>
+          <div class="trades" id="tpTop"></div>
           <div class="trades" id="tpTrades"></div>
         </div>
         <div class="panel" id="tpPanel"></div>
@@ -421,6 +424,7 @@ async function renderTokenPage(soft) {
     fillTradePanel(t);
     drawChart(t);
     loadTrades(t);
+    loadHolders(t);
   } else {
     const el = (id) => $(id);
     if (el("tpMcap")) { el("tpMcap").textContent = fmtUsd(t.mcapUsd); el("tpRaised").textContent = t.realEth.toFixed(3) + " ETH"; el("tpBonded").textContent = t.migrated ? "✓" : t.prog.toFixed(1) + "%"; }
@@ -500,6 +504,20 @@ async function drawChart(t) {
     svg.innerHTML = `
       <path d="${d} L ${X(vals.length - 1)} ${H} L ${X(0)} ${H} Z" fill="${col}18"/>
       <path d="${d}" fill="none" stroke="${col}" stroke-width="2.5" stroke-linejoin="round"/>`;
+  } catch (e) {}
+}
+
+async function loadHolders(t) {
+  try {
+    const d = await (await fetch("/holders/" + t.addr.toLowerCase())).json();
+    const c = $("tpHolders"); if (c) c.textContent = d.count;
+    const el = $("tpTop"); if (!el) return;
+    el.innerHTML = d.top.length
+      ? `<div style="font-size:12px;color:var(--faint);margin:10px 0 4px">top holders</div>` + d.top.map((h, i) => `
+        <div class="trade"><span>#${i + 1}${h.dev ? " 👑" : ""}</span>
+        <a href="${EXPLORER}/address/${h.a}" target="_blank" rel="noopener">${short(h.a)}${h.dev ? ` <span style="color:var(--amber);font-size:10px">dev</span>` : ""}</a>
+        <span style="display:flex;align-items:center;gap:8px"><span class="miniBar" style="width:60px;margin:0"><div style="width:${Math.min(100, h.pct)}%"></div></span>${h.pct.toFixed(2)}%</span></div>`).join("")
+      : "";
   } catch (e) {}
 }
 
