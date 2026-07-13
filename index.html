@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HoodPad — launch tokens on Robinhood Chain</title>
+<link rel="icon" type="image/png" href="/logo.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Sora:wght@400;600&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.2/ethers.umd.min.js"></script>
@@ -97,12 +98,15 @@
   .status.ok{color:var(--green)}.status.err{color:var(--red)}
   .empty{padding:60px 18px;text-align:center;color:var(--faint);font-size:14px}
   .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#122019;border:1px solid #2C4A38;color:var(--mint);padding:12px 18px;border-radius:14px;font-size:13px;display:none;z-index:30;max-width:90vw}
+  .socials{font-family:'JetBrains Mono';font-size:12px;margin:-8px 0 16px}
+  .socials a{color:var(--green);text-decoration:none}
+  .socials a:hover{text-decoration:underline}
 </style>
 </head>
 <body>
 
 <div class="nav">
-  <div class="logo">HOOD<em>PAD</em></div>
+  <div class="logo" style="display:flex;align-items:center;gap:9px"><img src="/logo.png" width="28" height="28" alt="" style="border-radius:8px">HOOD<em>PAD</em></div>
   <div class="navBtns">
     <button class="btn ghost" id="connectBtn" onclick="connect()">Connect wallet</button>
     <button class="btn" onclick="openLaunch()">+ Launch a token</button>
@@ -140,6 +144,10 @@
     <div class="field"><label>Name</label><input id="lName" placeholder="Sherwood" maxlength="32"></div>
     <div class="field"><label>Ticker</label><input id="lTick" placeholder="SHER" maxlength="10" style="text-transform:uppercase"></div>
     <div class="field"><label>Your first buy (ETH, optional)</label><input id="lBuy" placeholder="0.01" inputmode="decimal"></div>
+    <div class="field"><label>Logo image link (optional)</label><input id="lImg" placeholder="https://i.imgur.com/..."></div>
+    <div class="field"><label>Telegram (optional)</label><input id="lTg" placeholder="https://t.me/..."></div>
+    <div class="field"><label>X / Twitter (optional)</label><input id="lX" placeholder="https://x.com/..."></div>
+    <div class="field"><label>Website (optional)</label><input id="lWeb" placeholder="https://..."></div>
     <button class="btn" style="width:100%;padding:14px" id="launchGo" onclick="doLaunch()">Launch 🏹</button>
     <div class="status" id="lStatus"></div>
     <div class="note">Your buy lands in the same transaction as the launch — nobody can snipe before you.</div>
@@ -189,7 +197,7 @@ const SUPPLY = E.parseEther("1000000000");
 
 let PAD_ADDR = null, reader = null, pad = null;
 let signer = null, wallet = null;
-let tokens = [], tab = "trending", ethUsd = 0, currentToken = null;
+let tokens = [], tab = "trending", ethUsd = 0, currentToken = null, metaMap = {};
 
 const $ = (id) => document.getElementById(id);
 const short = (a) => a.slice(0, 6) + "…" + a.slice(-4);
@@ -220,6 +228,7 @@ async function init() {
 
 async function loadTokens() {
   try {
+    try { metaMap = await (await fetch("/meta")).json(); } catch (e) {}
     const n = Number(await pad.tokenCount());
     const addrs = await Promise.all([...Array(n)].map((_, i) => pad.allTokens(i)));
     tokens = await Promise.all(addrs.map(async (a, i) => {
@@ -230,7 +239,8 @@ async function loadTokens() {
       const priceEth = Number(E.formatEther(price));
       const mcapUsd = priceEth * 1e9 * ethUsd;
       return { addr: a, i, name, symbol, migrated: curve.migrated, realEth: Number(E.formatEther(curve.realEth)),
-               priceEth, mcapUsd, prog: Number(prog) / 100, tax: curve.migrated ? Number(taxBps) / 100 : 15 };
+               priceEth, mcapUsd, prog: Number(prog) / 100, tax: curve.migrated ? Number(taxBps) / 100 : 15,
+               creator: curve.creator, meta: metaMap[a.toLowerCase()] || {} };
     }));
     render();
   } catch (e) { console.error(e); }
@@ -238,6 +248,18 @@ async function loadTokens() {
 
 function taxClass(t) { return t >= 10 ? "hot" : t > 3.5 ? "mid" : "low"; }
 function hueOf(s) { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) % 360; return h; }
+function avatarHtml(t, size) {
+  const fallback = `this.outerHTML='<div class=&quot;avatar&quot; style=&quot;width:${size}px;height:${size}px;background:linear-gradient(135deg,hsl(${hueOf(t.symbol)} 70% 18%),hsl(${hueOf(t.symbol)} 80% 32%))&quot;>${t.symbol.slice(0,2)}</div>'`;
+  if (t.meta.image) return `<img src="${t.meta.image}" width="${size}" height="${size}" style="border-radius:13px;object-fit:cover" onerror="${fallback}">`;
+  return `<div class="avatar" style="width:${size}px;height:${size}px;background:linear-gradient(135deg,hsl(${hueOf(t.symbol)} 70% 18%),hsl(${hueOf(t.symbol)} 80% 32%))">${t.symbol.slice(0,2)}</div>`;
+}
+function socialsHtml(t) {
+  const m = t.meta, L = [];
+  if (m.telegram) L.push(`<a href="${m.telegram}" target="_blank" rel="noopener">telegram</a>`);
+  if (m.x) L.push(`<a href="${m.x}" target="_blank" rel="noopener">x</a>`);
+  if (m.website) L.push(`<a href="${m.website}" target="_blank" rel="noopener">website</a>`);
+  return L.length ? `<div class="socials">${L.join(" · ")}</div>` : "";
+}
 
 function render() {
   const g = $("grid");
@@ -250,7 +272,7 @@ function render() {
   g.innerHTML = list.map((t) => `
     <div class="card" onclick="openTrade('${t.addr}')">
       <div class="cardTop">
-        <div class="avatar" style="background:linear-gradient(135deg,hsl(${hueOf(t.symbol)} 70% 18%),hsl(${hueOf(t.symbol)} 80% 32%))">${t.symbol.slice(0,2)}</div>
+        ${avatarHtml(t, 42)}
         <div class="cardName"><div class="nm">${t.name}</div><div class="tk">$${t.symbol}</div></div>
         <div class="taxBadge ${taxClass(t.tax)}">${t.tax}% tax</div>
       </div>
@@ -273,7 +295,7 @@ function render() {
       <div class="eyebrow"><span class="dot"></span>Bonding now</div>
       <div class="heroCard" onclick="openTrade('${top.addr}')">
         <div class="heroLeft">
-          <div class="heroName">${top.name}</div>
+          <div class="heroName" style="display:flex;align-items:center;gap:12px">${avatarHtml(top, 44)}${top.name}</div>
           <div class="heroTick">$${top.symbol} · Robinhood Chain</div>
           <div class="heroStats">
             <div><span class="lbl">market cap</span><span class="val">${fmtUsd(top.mcapUsd)}</span></div>
@@ -346,7 +368,16 @@ async function doLaunch() {
     const value = fee + E.parseEther(buyEth.toString());
     const tx = await pad.connect(signer).createToken(name, tick, { value });
     st.textContent = "launching… " + tx.hash;
-    await tx.wait();
+    const rc = await tx.wait();
+    let newTok = null;
+    for (const log of rc.logs) {
+      try { const p = pad.interface.parseLog(log); if (p && p.name === "TokenCreated") { newTok = p.args.token; break; } } catch (e) {}
+    }
+    const img = $("lImg").value.trim(), tg = $("lTg").value.trim(), xx = $("lX").value.trim(), web = $("lWeb").value.trim();
+    if (newTok && (img || tg || xx || web)) {
+      st.textContent = "sign to attach your token info (free, no gas)…";
+      await submitMeta(newTok, { image: img, telegram: tg, x: xx, website: web });
+    }
     st.className = "status ok"; st.textContent = "✅ launched!";
     closeModals(); toast(`$${tick} is live 🏹`);
     await loadTokens();
@@ -360,8 +391,10 @@ async function openTrade(addr) {
   const t = currentToken;
   $("tradeInner").innerHTML = `
     <button class="closeX" onclick="closeModals()">✕</button>
-    <div class="mTitle">${t.name} <span style="color:var(--faint);font-size:13px">$${t.symbol}</span></div>
+    <div class="mTitle" style="display:flex;align-items:center;gap:10px">${avatarHtml(t, 36)}${t.name} <span style="color:var(--faint);font-size:13px">$${t.symbol}</span></div>
     <div class="mSub">${t.addr}</div>
+    ${socialsHtml(t)}
+    ${wallet && wallet.toLowerCase() === t.creator.toLowerCase() ? `<div style="margin-bottom:14px"><button class="btn ghost" style="font-size:12px;padding:7px 12px" onclick="openEditMeta()">edit token info</button></div>` : ""}
     <div class="heroStats" style="margin-bottom:18px">
       <div><span class="lbl">mcap</span><span class="val">${fmtUsd(t.mcapUsd)}</span></div>
       <div><span class="lbl">sell tax</span><span class="val">${t.tax}%</span></div>
@@ -421,6 +454,40 @@ async function doSell() {
     st.textContent = "selling…"; await tx.wait();
     st.className = "status ok"; st.textContent = "✅ sold (15% tax applied)"; loadTokens();
   } catch (e) { st.className = "status err"; st.textContent = e.shortMessage || e.message; }
+}
+
+async function submitMeta(token, m) {
+  const sig = await signer.signMessage("hoodpad-meta:" + token.toLowerCase());
+  const r = await fetch("/meta", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token, ...m, sig }) });
+  if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || "info save failed"); }
+}
+
+function openEditMeta() {
+  const t = currentToken, m = t.meta;
+  $("tradeInner").innerHTML = `
+    <button class="closeX" onclick="closeModals()">✕</button>
+    <div class="mTitle">Edit info · $${t.symbol}</div>
+    <div class="mSub">${t.addr}</div>
+    <div class="field"><label>Logo image link</label><input id="eImg" value="${m.image || ""}" placeholder="https://i.imgur.com/..."></div>
+    <div class="field"><label>Telegram</label><input id="eTg" value="${m.telegram || ""}" placeholder="https://t.me/..."></div>
+    <div class="field"><label>X / Twitter</label><input id="eX" value="${m.x || ""}" placeholder="https://x.com/..."></div>
+    <div class="field"><label>Website</label><input id="eWeb" value="${m.website || ""}" placeholder="https://..."></div>
+    <button class="btn" style="width:100%;padding:13px" onclick="doEditMeta()">Save (free, sign only)</button>
+    <div class="status" id="eStatus"></div>`;
+}
+
+async function doEditMeta() {
+  if (!(await needWallet())) return;
+  const st = $("eStatus"); st.className = "status"; st.textContent = "sign in wallet…";
+  try {
+    await submitMeta(currentToken.addr, {
+      image: $("eImg").value.trim(), telegram: $("eTg").value.trim(),
+      x: $("eX").value.trim(), website: $("eWeb").value.trim(),
+    });
+    st.className = "status ok"; st.textContent = "✅ saved";
+    await loadTokens(); openTrade(currentToken.addr);
+  } catch (e) { st.className = "status err"; st.textContent = e.message; }
 }
 
 function setTab(t) {
