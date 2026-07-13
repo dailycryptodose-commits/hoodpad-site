@@ -517,60 +517,82 @@ function sellAmtWei() {
 
 function openEditMetaPage() { $("tradeModal").classList.add("open"); openEditMeta(); }
 
-let live = null; // { pts:[], target, display, timers:[] }
+let live = null; // 60fps time-scrolling chart
 
 async function drawChart(t) {
-  // seed history once, then hand over to the live engine
   if (live && live.addr === t.addr) return;
   stopLiveChart();
-  let seed = [];
+  const WINDOW = 75_000; // ms of history on screen
+  let seedPrice = t.priceEth;
+  const now = performance.now();
+  const pts = [];
   try {
     const hist = await (await fetch("/prices/" + t.addr.toLowerCase())).json();
-    seed = (hist || []).slice(-240).map((p) => Number(E.formatEther(BigInt(p[1]))));
+    const h = (hist || []).slice(-60);
+    if (h.length) {
+      seedPrice = Number(E.formatEther(BigInt(h[h.length - 1][1])));
+      // compress recent history into the left half of the window
+      h.forEach((p, i) => pts.push([now - WINDOW + (i / h.length) * (WINDOW * 0.5), Number(E.formatEther(BigInt(p[1])))]));
+    }
   } catch (e) {}
-  const start = seed.length ? seed[seed.length - 1] : t.priceEth;
-  live = { addr: t.addr, pts: seed.length ? seed : [start], target: start, display: start, timers: [] };
+  if (!pts.length) pts.push([now - WINDOW, seedPrice]);
+
+  live = { addr: t.addr, pts, target: seedPrice, display: seedPrice, raf: null, poll: null, lastSample: 0, dead: false };
   $("chartEmpty") && ($("chartEmpty").style.display = "none");
 
-  // poll the real price every 2.5s
-  live.timers.push(setInterval(async () => {
+  live.poll = setInterval(async () => {
     try { live.target = Number(E.formatEther(await pad.priceWei(t.addr))); } catch (e) {}
-  }, 2500));
+  }, 2500);
 
-  // heartbeat: ease toward it + scroll, 5 fps
-  live.timers.push(setInterval(() => {
-    live.display += (live.target - live.display) * 0.18;
-    live.pts.push(live.display);
-    if (live.pts.length > 300) live.pts.shift();
-    renderLiveChart();
-  }, 200));
-  renderLiveChart();
+  const frame = (ts) => {
+    if (!live || live.dead) return;
+    // frame-rate independent easing toward the real price
+    live.display += (live.target - live.display) * 0.06;
+    if (ts - live.lastSample > 120) { live.pts.push([ts, live.display]); live.lastSample = ts; }
+    const cutoff = ts - WINDOW;
+    while (live.pts.length > 2 && live.pts[1][0] < cutoff) live.pts.shift();
+    renderLiveChart(ts, WINDOW);
+    live.raf = requestAnimationFrame(frame);
+  };
+  live.raf = requestAnimationFrame(frame);
 }
 
 function stopLiveChart() {
-  if (live) { live.timers.forEach(clearInterval); live = null; }
+  if (!live) return;
+  live.dead = true;
+  clearInterval(live.poll);
+  cancelAnimationFrame(live.raf);
+  live = null;
 }
 
-function renderLiveChart() {
+function renderLiveChart(nowTs, WINDOW) {
   const svg = $("chartSvg"); if (!svg || !live) return;
-  const vals = live.pts;
-  if (vals.length < 2) return;
+  const W = 600, H = 240, P = 10;
+  const pts = [...live.pts, [nowTs, live.display]];
+  const vals = pts.map((p) => p[1]);
   let min = Math.min(...vals), max = Math.max(...vals);
-  const mid = (min + max) / 2 || vals[0];
-  const span = Math.max(max - min, mid * 0.02, 1e-18); // never dead-flat
+  const mid = (min + max) / 2 || vals[0] || 1;
+  const span = Math.max(max - min, mid * 0.02, 1e-18);
   min = mid - span / 2;
-  const W = 600, H = 240, PADp = 10;
-  const X = (i) => PADp + (i / (vals.length - 1)) * (W - 2 * PADp);
-  const Y = (v) => H - PADp - ((v - min) / span) * (H - 2 * PADp);
-  let d = `M ${X(0)} ${Y(vals[0]).toFixed(2)}`;
-  for (let i = 1; i < vals.length; i++) d += ` L ${X(i).toFixed(2)} ${Y(vals[i]).toFixed(2)}`;
+  const X = (t) => P + ((t - (nowTs - WINDOW)) / WINDOW) * (W - 2 * P);
+  const Y = (v) => H - P - ((v - min) / span) * (H - 2 * P);
+
+  // smooth curve: quadratic through midpoints
+  const xy = pts.map((p) => [X(p[0]), Y(p[1])]);
+  let d = `M ${xy[0][0].toFixed(1)} ${xy[0][1].toFixed(1)}`;
+  for (let i = 1; i < xy.length - 1; i++) {
+    const mx = (xy[i][0] + xy[i + 1][0]) / 2, my = (xy[i][1] + xy[i + 1][1]) / 2;
+    d += ` Q ${xy[i][0].toFixed(1)} ${xy[i][1].toFixed(1)} ${mx.toFixed(1)} ${my.toFixed(1)}`;
+  }
+  const last = xy[xy.length - 1];
+  d += ` L ${last[0].toFixed(1)} ${last[1].toFixed(1)}`;
+
   const up = vals[vals.length - 1] >= vals[0];
   const col = up ? "#5FBE12" : "#FF6B6B";
-  const cx = X(vals.length - 1), cy = Y(vals[vals.length - 1]);
   svg.innerHTML = `
-    <path d="${d} L ${X(vals.length - 1)} ${H} L ${X(0)} ${H} Z" fill="${col}18"/>
-    <path d="${d}" fill="none" stroke="${col}" stroke-width="2.5" stroke-linejoin="round"/>
-    <circle cx="${cx}" cy="${cy}" r="4" fill="${col}"><animate attributeName="r" values="3;5;3" dur="1.6s" repeatCount="indefinite"/></circle>`;
+    <path d="${d} L ${last[0].toFixed(1)} ${H} L ${xy[0][0].toFixed(1)} ${H} Z" fill="${col}18"/>
+    <path d="${d}" fill="none" stroke="${col}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="4" fill="${col}"><animate attributeName="r" values="3;5;3" dur="1.6s" repeatCount="indefinite"/></circle>`;
 }
 
 async function loadHolders(t) {
