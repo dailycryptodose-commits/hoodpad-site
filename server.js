@@ -86,3 +86,43 @@ app.get("/", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log("hoodpad site running on " + port));
+
+// ---- price recorder for charts (1-min ticks, kept in /data) ----
+const PRICES_FILE = path.join(DATA_DIR, "prices.json");
+let prices = {};
+try { prices = JSON.parse(fs.readFileSync(PRICES_FILE, "utf8")); } catch (e) {}
+const padFull = PAD ? new ethers.Contract(PAD, [
+  "function tokenCount() view returns (uint)",
+  "function allTokens(uint) view returns (address)",
+  "function priceWei(address) view returns (uint)"
+], provider) : null;
+
+async function recordPrices() {
+  if (!padFull) return;
+  try {
+    const n = Number(await padFull.tokenCount());
+    const now = Math.floor(Date.now() / 1000);
+    for (let i = 0; i < n; i++) {
+      const a = (await padFull.allTokens(i)).toLowerCase();
+      try {
+        const p = await padFull.priceWei(a);
+        if (!prices[a]) prices[a] = [];
+        const arr = prices[a];
+        arr.push([now, p.toString()]);
+        if (arr.length > 2000) prices[a] = arr.slice(-2000);
+      } catch (e) {}
+    }
+    fs.writeFileSync(PRICES_FILE, JSON.stringify(prices));
+  } catch (e) {}
+}
+setInterval(recordPrices, 60_000);
+recordPrices();
+
+app.get("/prices/:token", (req, res) => {
+  const t = (req.params.token || "").toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(t)) return res.status(400).json([]);
+  res.json(prices[t] || []);
+});
+
+// token pages — same app, client-side routing
+app.get("/t/:token", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
