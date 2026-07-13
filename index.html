@@ -35,6 +35,8 @@
 
   .nav{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--line);position:sticky;top:0;background:rgba(10,15,12,.92);backdrop-filter:blur(10px);z-index:5}
   .logo{font-family:'Unbounded';font-weight:700;font-size:17px;letter-spacing:.5px}
+  .logoImg{height:150px;width:auto;margin:-38px 0}
+  @media(max-width:760px){.logoImg{height:88px;margin:-18px 0}}
   .logo em{font-style:normal;color:var(--green)}
   .navBtns{display:flex;gap:8px}
   .btn{background:var(--green);color:#06130B;border:none;font-weight:600;font-size:13px;padding:10px 16px;border-radius:12px;box-shadow:0 0 24px rgba(56,224,123,.25)}
@@ -159,8 +161,8 @@
 
 <div class="nav">
   <a href="/" class="logo" style="display:flex;align-items:center;text-decoration:none">
-    <img src="/logo-dark.png" class="logoDark" height="56" alt="ROBN.FUN" style="display:block">
-    <img src="/logo-light.png" class="logoLight" height="56" alt="ROBN.FUN" style="display:none">
+    <img src="/logo-dark.png" class="logoDark logoImg" alt="ROBN.FUN" style="display:block">
+    <img src="/logo-light.png" class="logoLight logoImg" alt="ROBN.FUN" style="display:none">
   </a>
   <input id="searchBar" class="search" placeholder="search name, ticker, or paste CA…" oninput="doSearch(this.value)" onkeydown="if(event.key==='Enter')searchGo(this.value)">
   <div class="navBtns">
