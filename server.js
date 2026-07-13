@@ -81,7 +81,7 @@ app.get("/img/:file", (req, res) => {
   res.sendFile(p);
 });
 
-app.get("/logo.png", (req, res) => res.sendFile(path.join(__dirname, "logo.png")));
+app.get("/logo.png", (req, res) => { res.setHeader("Cache-Control", "public, max-age=86400"); res.sendFile(path.join(__dirname, "logo.png")); });
 app.get("/", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
 
 const port = process.env.PORT || 3000;
@@ -117,6 +117,51 @@ async function recordPrices() {
 }
 setInterval(recordPrices, 60_000);
 recordPrices();
+
+// ---- token list cache: one fast /tokens fetch instead of dozens of RPC calls per visitor ----
+let tokenCache = { ts: 0, tokens: [] };
+const nameCache = {};
+const padRead = PAD ? new ethers.Contract(PAD, [
+  "function tokenCount() view returns (uint)",
+  "function allTokens(uint) view returns (address)",
+  "function curves(address) view returns (uint ethReserve, uint tokReserve, uint realEth, address creator, bool migrated)",
+  "function priceWei(address) view returns (uint)",
+  "function progress(address) view returns (uint)"
+], provider) : null;
+
+async function buildTokenCache() {
+  if (!padRead) return;
+  try {
+    const n = Number(await padRead.tokenCount());
+    const idx = [...Array(n).keys()];
+    const addrs = await Promise.all(idx.map((i) => padRead.allTokens(i)));
+    const items = await Promise.all(addrs.map(async (addr, i) => {
+      const a = addr.toLowerCase();
+      if (!nameCache[a]) {
+        const t = new ethers.Contract(a, ["function name() view returns (string)", "function symbol() view returns (string)"], provider);
+        nameCache[a] = { name: await t.name(), symbol: await t.symbol() };
+      }
+      const [curve, price, prog] = await Promise.all([padRead.curves(a), padRead.priceWei(a), padRead.progress(a)]);
+      const st = stats.perToken[a] || {};
+      return {
+        addr, i, name: nameCache[a].name, symbol: nameCache[a].symbol,
+        migrated: curve.migrated, realEth: curve.realEth.toString(),
+        price: price.toString(), prog: Number(prog),
+        creator: curve.creator, meta: meta[a] || {},
+        created: st.created || (prices[a] && prices[a][0] ? prices[a][0][0] : null),
+        trades: st.trades || 0,
+      };
+    }));
+    tokenCache = { ts: Math.floor(Date.now() / 1000), tokens: items };
+  } catch (e) {}
+}
+setInterval(buildTokenCache, 12_000);
+buildTokenCache();
+
+app.get("/tokens", (req, res) => {
+  res.setHeader("Cache-Control", "public, max-age=5");
+  res.json(tokenCache);
+});
 
 app.get("/prices/:token", (req, res) => {
   const t = (req.params.token || "").toLowerCase();

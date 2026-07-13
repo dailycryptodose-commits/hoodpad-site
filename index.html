@@ -522,6 +522,22 @@ async function loadTrades(t) {
 }
 
 async function loadTokens() {
+  // fast path: server-built cache, one fetch
+  try {
+    const c = await (await fetch("/tokens")).json();
+    if (c && c.ts && c.tokens) {
+      tokens = c.tokens.map((t) => {
+        const priceEth = Number(E.formatEther(BigInt(t.price)));
+        return { addr: t.addr, i: t.i, name: t.name, symbol: t.symbol, migrated: t.migrated,
+                 realEth: Number(E.formatEther(BigInt(t.realEth))), priceEth,
+                 mcapUsd: priceEth * 1e9 * ethUsd, prog: t.prog / 100,
+                 creator: t.creator, meta: t.meta || {}, created: t.created, trades: t.trades };
+      });
+      render();
+      return;
+    }
+  } catch (e) {}
+  // fallback: direct rpc
   try {
     try { metaMap = await (await fetch("/meta")).json(); } catch (e) {}
     let statMap = {};
