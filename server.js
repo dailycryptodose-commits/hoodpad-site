@@ -139,7 +139,8 @@ async function buildTokenCache() {
     const n = Number(await padRead.tokenCount());
     const idx = [...Array(n).keys()];
     const addrs = await Promise.all(idx.map((i) => padRead.allTokens(i)));
-    const items = await Promise.all(addrs.map(async (addr, i) => {
+    const items = (await Promise.all(addrs.map(async (addr, i) => {
+      try {
       const a = addr.toLowerCase();
       if (!nameCache[a]) {
         const t = new ethers.Contract(a, ["function name() view returns (string)", "function symbol() view returns (string)"], provider);
@@ -157,7 +158,8 @@ async function buildTokenCache() {
         creatorFees: cFees.toString(),
         vol24: (st.t24 || []).filter((x) => x[0] > Date.now() - 86_400_000).reduce((s, x) => s + BigInt(x[1]), 0n).toString(),
       };
-    }));
+      } catch (e) { return null; }
+    }))).filter(Boolean);
     tokenCache = { ts: Math.floor(Date.now() / 1000), tokens: items };
   } catch (e) {}
 }

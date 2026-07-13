@@ -606,6 +606,22 @@ async function fillStatRail(t) {
   } catch (e) {}
 }
 
+async function refreshCurrentToken() {
+  const t = currentToken; if (!t) return;
+  try {
+    const [curve, price, prog] = await Promise.all([pad.curves(t.addr), pad.priceWei(t.addr), pad.progress(t.addr)]);
+    t.migrated = curve.migrated;
+    t.realEth = Number(E.formatEther(curve.realEth));
+    t.priceEth = Number(E.formatEther(price));
+    t.mcapUsd = t.priceEth * 1e9 * ethUsd;
+    t.prog = Number(prog) / 100;
+    if (live) live.target = t.priceEth;
+    renderTokenPage(true);
+    fillTradePanel(t);
+    loadTrades(t);
+  } catch (e) {}
+}
+
 function openEditMetaPage() { $("tradeModal").classList.add("open"); openEditMeta(); }
 
 let live = null; // 60fps time-scrolling chart
@@ -995,7 +1011,7 @@ async function doBuy() {
   try {
     const tx = await pad.connect(signer).buy(currentToken.addr, { value: E.parseEther(v.toString()) });
     st.textContent = "buying… "; await tx.wait();
-    st.className = "status ok"; st.textContent = "✅ bought"; loadTokens();
+    st.className = "status ok"; st.textContent = "✅ bought"; refreshCurrentToken(); loadTokens();
   } catch (e) { st.className = "status err"; st.textContent = e.shortMessage || e.message; }
 }
 
@@ -1011,7 +1027,7 @@ async function doSell() {
     st.textContent = "confirm sell in wallet…";
     const tx = await pad.connect(signer).sell(currentToken.addr, amt);
     st.textContent = "selling…"; await tx.wait();
-    st.className = "status ok"; st.textContent = "✅ sold"; loadTokens();
+    st.className = "status ok"; st.textContent = "✅ sold"; refreshCurrentToken(); loadTokens();
   } catch (e) { st.className = "status err"; st.textContent = e.shortMessage || e.message; }
 }
 
