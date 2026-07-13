@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HoodPad — launch tokens on Robinhood Chain</title>
+<link rel="icon" type="image/png" href="/logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Sora:wght@400;600&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.2/ethers.umd.min.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0}
+  :root{--bg:#0A0F0C;--panel:#0E1511;--line:#18251D;--line2:#1C2A21;--txt:#EAF5EC;--dim:#8FA898;--faint:#69806F;--green:#38E07B;--mint:#B8F5CF;--red:#FF6B6B;--amber:#FFB25C;--lime:#D8E05C}
+  body{min-height:100vh;background:var(--bg);color:var(--txt);font-family:'Sora',sans-serif;padding-bottom:80px}
+  button{font-family:'Sora',sans-serif;cursor:pointer}
+  input{font-family:'JetBrains Mono',monospace}
+
+  .nav{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--line);position:sticky;top:0;background:rgba(10,15,12,.92);backdrop-filter:blur(10px);z-index:5}
+  .logo{font-family:'Unbounded';font-weight:700;font-size:17px;letter-spacing:.5px}
+  .logo em{font-style:normal;color:var(--green)}
+  .navBtns{display:flex;gap:8px}
+  .btn{background:var(--green);color:#06130B;border:none;font-weight:600;font-size:13px;padding:10px 16px;border-radius:12px;box-shadow:0 0 24px rgba(56,224,123,.25)}
+  .btn.ghost{background:transparent;color:var(--mint);border:1px solid var(--line2);box-shadow:none}
+  .btn:disabled{opacity:.5;cursor:default}
+
+  .feed{display:flex;overflow:hidden;white-space:nowrap;padding:9px 0;border-bottom:1px solid var(--line);font-family:'JetBrains Mono';font-size:11.5px;color:var(--dim)}
+  .feedInner{display:flex;gap:28px;animation:mq 30s linear infinite;padding-left:100%}
+  @keyframes mq{from{transform:translateX(0)}to{transform:translateX(-100%)}}
+  .buyC{color:var(--green)}.sellC{color:var(--red)}.jeet{color:var(--amber)}
+
+  .wrap{max-width:1080px;margin:0 auto}
+  .hero{padding:26px 18px 8px}
+  .eyebrow{font-family:'JetBrains Mono';font-size:11px;letter-spacing:2px;color:var(--green);text-transform:uppercase;margin-bottom:8px}
+  .eyebrow .dot{display:inline-block;width:7px;height:7px;border-radius:99px;background:var(--green);margin-right:6px;animation:pulse 1.6s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+  .heroCard{background:linear-gradient(160deg,#0F1712,#0C1410 60%);border:1px solid var(--line2);border-radius:22px;padding:22px 20px;display:flex;flex-wrap:wrap;gap:18px;align-items:center;cursor:pointer}
+  .heroLeft{flex:1;min-width:210px}
+  .heroName{font-family:'Unbounded';font-weight:700;font-size:24px;margin:6px 0 2px}
+  .heroTick{font-family:'JetBrains Mono';color:var(--dim);font-size:13px;margin-bottom:14px}
+  .heroStats{display:flex;gap:22px;font-size:13px}
+  .heroStats .lbl{display:block;color:var(--faint);font-size:11px;margin-bottom:2px}
+  .heroStats .val{font-family:'JetBrains Mono';font-weight:700;font-size:16px}
+
+  .dial{display:flex;flex-direction:column;align-items:center;gap:4px}
+  .dialNum{font-family:'Unbounded';font-weight:700;font-size:30px;fill:var(--txt)}
+  .dialSub{font-family:'JetBrains Mono';font-size:10px;fill:var(--faint);letter-spacing:2px}
+  .dialNext{text-align:center;font-size:12px;color:var(--dim);width:190px}
+  .dialNext b{color:var(--green)}
+
+  .miniBar{height:5px;background:#16211B;border-radius:99px;overflow:hidden;margin-top:7px}
+  .miniBar div{height:100%;background:linear-gradient(90deg,#1E7A46,var(--green));border-radius:99px;transition:width 1s}
+  .miniBar.wide{flex:1;margin-top:0}
+
+  .tabs{display:flex;gap:8px;padding:22px 18px 12px;flex-wrap:wrap}
+  .tabBtn{background:transparent;border:1px solid var(--line2);color:var(--dim);font-size:13px;font-weight:600;padding:9px 15px;border-radius:99px}
+  .tabBtn.on{background:#122019;border-color:#2C4A38;color:var(--mint)}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px;padding:0 18px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:16px;cursor:pointer;transition:border-color .2s}
+  .card:hover{border-color:#2C4A38}
+  .cardTop{display:flex;align-items:center;gap:11px;margin-bottom:13px}
+  .avatar{width:42px;height:42px;border-radius:13px;display:flex;align-items:center;justify-content:center;font-size:19px;font-family:'Unbounded';font-weight:700;color:#06130B}
+  .cardName{flex:1;min-width:0}
+  .nm{font-weight:600;font-size:14.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tk{font-family:'JetBrains Mono';font-size:11px;color:var(--faint)}
+  .taxBadge{font-family:'JetBrains Mono';font-size:11px;font-weight:700;padding:5px 9px;border-radius:9px;white-space:nowrap}
+  .taxBadge.hot{background:#2A1512;color:var(--amber)}
+  .taxBadge.mid{background:#20240F;color:var(--lime)}
+  .taxBadge.low{background:#0F241A;color:var(--green)}
+  .cardStats{display:flex;gap:26px;margin-bottom:12px}
+  .cardStats .lbl{display:block;font-size:10.5px;color:var(--faint)}
+  .cardStats .val{font-family:'JetBrains Mono';font-weight:700;font-size:14px}
+  .bondRow{display:flex;align-items:center;gap:10px}
+  .bondPct{font-family:'JetBrains Mono';font-size:10.5px;color:var(--dim);white-space:nowrap}
+
+  .tiers{margin:30px 18px 0;border:1px dashed var(--line2);border-radius:18px;padding:16px 18px;font-size:12.5px;color:var(--dim);display:flex;gap:18px;flex-wrap:wrap;align-items:center}
+  .tiers b{font-family:'JetBrains Mono'}
+  .tHot b{color:var(--amber)}.tMid b{color:var(--lime)}.tLow b{color:var(--green)}
+
+  .modalBg{position:fixed;inset:0;background:rgba(4,8,6,.75);backdrop-filter:blur(6px);display:none;align-items:flex-end;justify-content:center;z-index:20}
+  .modalBg.open{display:flex}
+  @media(min-width:640px){.modalBg{align-items:center}}
+  .modal{background:#0D1410;border:1px solid var(--line2);border-radius:22px 22px 0 0;padding:22px;width:100%;max-width:440px;max-height:90vh;overflow-y:auto}
+  @media(min-width:640px){.modal{border-radius:22px}}
+  .mTitle{font-family:'Unbounded';font-weight:700;font-size:18px;margin-bottom:4px}
+  .mSub{font-family:'JetBrains Mono';font-size:12px;color:var(--faint);margin-bottom:18px;word-break:break-all}
+  .field{margin-bottom:14px}
+  .field label{display:block;font-size:12px;color:var(--dim);margin-bottom:6px}
+  .field input{width:100%;background:#0A100D;border:1px solid var(--line2);border-radius:12px;color:var(--txt);font-size:15px;padding:12px 14px;outline:none}
+  .field input:focus{border-color:#2C4A38}
+  .row2{display:flex;gap:10px}
+  .row2 .btn{flex:1;padding:13px}
+  .btn.sellBtn{background:#241214;color:#FFB0B0;box-shadow:none;border:1px solid #3A1D20}
+  .quote{font-family:'JetBrains Mono';font-size:12px;color:var(--dim);margin:-6px 0 14px;min-height:16px}
+  .note{font-size:12px;color:var(--faint);margin-top:12px;line-height:1.5}
+  .closeX{float:right;background:none;border:none;color:var(--faint);font-size:20px}
+  .status{font-family:'JetBrains Mono';font-size:12px;margin-top:12px;min-height:16px;word-break:break-all}
+  .status.ok{color:var(--green)}.status.err{color:var(--red)}
+  .empty{padding:60px 18px;text-align:center;color:var(--faint);font-size:14px}
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#122019;border:1px solid #2C4A38;color:var(--mint);padding:12px 18px;border-radius:14px;font-size:13px;display:none;z-index:30;max-width:90vw}
+  .socials{font-family:'JetBrains Mono';font-size:12px;margin:-8px 0 16px}
+  .socials a{color:var(--green);text-decoration:none}
+  .socials a:hover{text-decoration:underline}
+  .drop{border:1.5px dashed var(--line2);border-radius:14px;padding:18px;text-align:center;color:var(--faint);font-size:12.5px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:12px;min-height:64px;transition:border-color .2s}
+  .drop.over{border-color:var(--green);color:var(--mint)}
+  .drop img{width:48px;height:48px;border-radius:12px;object-fit:cover}
+  .tpage{max-width:920px;margin:0 auto;padding:24px 18px;display:none}
+  .tpHead{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:6px}
+  .tpName{font-family:'Unbounded';font-weight:700;font-size:26px}
+  .tpAddr{font-family:'JetBrains Mono';font-size:11.5px;color:var(--faint);word-break:break-all;margin-bottom:14px;cursor:pointer}
+  .back{font-family:'JetBrains Mono';font-size:12px;color:var(--dim);text-decoration:none;display:inline-block;margin-bottom:18px}
+  .back:hover{color:var(--mint)}
+  .tpGrid{display:grid;grid-template-columns:1fr;gap:14px}
+  @media(min-width:860px){.tpGrid{grid-template-columns:1.6fr 1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:18px}
+  .chartWrap{position:relative}
+  .chartWrap svg{width:100%;height:240px;display:block}
+  .chartEmpty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--faint);font-size:13px}
+  .trades{margin-top:14px}
+  .trade{display:flex;justify-content:space-between;font-family:'JetBrains Mono';font-size:12px;padding:8px 0;border-bottom:1px solid var(--line)}
+  .trade:last-child{border-bottom:none}
+  .trade a{color:inherit;text-decoration:none}
+  .trade a:hover{color:var(--mint)}
+  .search{flex:1;max-width:380px;margin:0 14px;background:#0E1511;border:1px solid var(--line2);border-radius:12px;color:var(--txt);font-family:'JetBrains Mono';font-size:12.5px;padding:10px 14px;outline:none;min-width:0}
+  .search:focus{border-color:#2C4A38}
+  @media(max-width:640px){.search{display:none}}
+  .searchM{margin:14px 18px 0;display:none}
+  @media(max-width:640px){.searchM{display:block}.searchM .search{display:block;max-width:none;width:100%;margin:0}}
+  .explorer{font-family:'JetBrains Mono';font-size:11.5px;color:var(--dim);text-decoration:none}
+  .explorer:hover{color:var(--mint)}
+  .chips{display:flex;gap:6px;margin:-6px 0 12px}
+  .chip{background:#0A100D;border:1px solid var(--line2);color:var(--dim);font-family:'JetBrains Mono';font-size:11px;padding:6px 10px;border-radius:9px}
+  .chip:hover{border-color:#2C4A38;color:var(--mint)}
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <a href="/" class="logo" style="display:flex;align-items:center;gap:9px;text-decoration:none;color:inherit"><img src="/logo.png" width="28" height="28" alt="" style="border-radius:8px">HOOD<em>PAD</em></a>
+  <input id="searchBar" class="search" placeholder="search name, ticker, or paste CA…" oninput="doSearch(this.value)" onkeydown="if(event.key==='Enter')searchGo(this.value)">
+  <div class="navBtns">
+    <button class="btn ghost" id="connectBtn" onclick="connect()">Connect wallet</button>
+    <button class="btn" onclick="openLaunch()">+ Launch a token</button>
+  </div>
+</div>
+
+<div class="feed" id="feed" style="display:none"><div class="feedInner" id="feedInner"></div></div>
+
+<div class="wrap" id="homeView">
+  <div class="searchM"><input class="search" placeholder="search name, ticker, or paste CA…" oninput="doSearch(this.value)" onkeydown="if(event.key==='Enter')searchGo(this.value)"></div>
+  <div class="hero" id="hero" style="display:none"></div>
+
+  <div class="tabs">
+    <button class="tabBtn on" data-tab="trending" onclick="setTab('trending')">🔥 Trending</button>
+    <button class="tabBtn" data-tab="new" onclick="setTab('new')">✨ New</button>
+    <button class="tabBtn" data-tab="bonding" onclick="setTab('bonding')">⏳ Bonding now</button>
+  </div>
+
+  <div class="grid" id="grid"></div>
+  <div class="empty" id="empty" style="display:none">no tokens yet — be the first to launch one</div>
+
+  <div class="tiers">
+    <span>How the jeet tax works:</span>
+    <span class="tHot"><b>15%</b> while bonding</span>
+    <span class="tMid"><b>7%</b> after migration</span>
+    <span class="tLow"><b>3%</b> past the maturity cap — forever</span>
+  </div>
+</div>
+
+<div class="tpage" id="tokenView"></div>
+
+<!-- launch modal -->
+<div class="modalBg" id="launchModal">
+  <div class="modal">
+    <button class="closeX" onclick="closeModals()">✕</button>
+    <div class="mTitle">Launch a token</div>
+    <div class="mSub">live in one transaction · creation fee <span id="feeShow">…</span> ETH</div>
+    <div class="field"><label>Name</label><input id="lName" placeholder="Sherwood" maxlength="32"></div>
+    <div class="field"><label>Ticker</label><input id="lTick" placeholder="SHER" maxlength="10" style="text-transform:uppercase"></div>
+    <div class="field"><label>Your first buy (ETH, optional)</label><input id="lBuy" placeholder="0.01" inputmode="decimal"></div>
+    <div class="field"><label>Logo (optional — drag an image here or click)</label>
+      <div class="drop" id="lDrop" onclick="document.getElementById('lFile').click()">
+        <span id="lDropTxt">drop image / click to choose</span>
+        <img id="lPreview" style="display:none">
+      </div>
+      <input type="file" id="lFile" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none" onchange="pickImage(this, 'l')">
+    </div>
+    <div class="field"><label>…or logo image link (optional)</label><input id="lImg" placeholder="https://i.imgur.com/..."></div>
+    <div class="field"><label>Telegram (optional)</label><input id="lTg" placeholder="https://t.me/..."></div>
+    <div class="field"><label>X / Twitter (optional)</label><input id="lX" placeholder="https://x.com/..."></div>
+    <div class="field"><label>Website (optional)</label><input id="lWeb" placeholder="https://..."></div>
+    <button class="btn" style="width:100%;padding:14px" id="launchGo" onclick="doLaunch()">Launch 🏹</button>
+    <div class="status" id="lStatus"></div>
+    <div class="note">Your buy lands in the same transaction as the launch — nobody can snipe before you.</div>
+  </div>
+</div>
+
+<!-- trade modal -->
+<div class="modalBg" id="tradeModal">
+  <div class="modal" id="tradeInner"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const E = ethers;
+const RPC = "https://rpc.mainnet.chain.robinhood.com";
+const CHAIN_ID = 4663;
+const CHAIN_HEX = "0x1237";
+
+const PAD_ABI = [
+  "function tokenCount() view returns (uint)",
+  "function allTokens(uint) view returns (address)",
+  "function curves(address) view returns (uint ethReserve, uint tokReserve, uint realEth, address creator, bool migrated)",
+  "function priceWei(address) view returns (uint)",
+  "function progress(address) view returns (uint)",
+  "function quoteBuy(address, uint) view returns (uint)",
+  "function quoteSell(address, uint) view returns (uint)",
+  "function creationFee() view returns (uint)",
+  "function migrationEth() view returns (uint)",
+  "function createToken(string, string, bytes32) payable returns (address)",
+  "function tokenInitHash(string, string, address) view returns (bytes32)",
+  "function buy(address) payable",
+  "function sell(address, uint)",
+  "event TokenCreated(address indexed token, address indexed creator, string name, string symbol)",
+  "event Buy(address indexed token, address indexed buyer, uint ethIn, uint tokensOut)",
+  "event Sell(address indexed token, address indexed seller, uint tokensIn, uint ethOut, uint taxEth)"
+];
+const TOK_ABI = [
+  "function name() view returns (string)",
+  "function symbol() view returns (string)",
+  "function balanceOf(address) view returns (uint)",
+  "function allowance(address, address) view returns (uint)",
+  "function approve(address, uint) returns (bool)",
+  "function sellTaxBps() view returns (uint16)",
+  "function migrated() view returns (bool)"
+];
+const SUPPLY = E.parseEther("1000000000");
+
+let PAD_ADDR = null, reader = null, pad = null;
+let signer = null, wallet = null;
+let tokens = [], tab = "trending", ethUsd = 0, currentToken = null, metaMap = {};
+
+const $ = (id) => document.getElementById(id);
+const short = (a) => a.slice(0, 6) + "…" + a.slice(-4);
+const fmtUsd = (n) => n >= 1e6 ? "$" + (n/1e6).toFixed(2) + "M" : n >= 1e3 ? "$" + (n/1e3).toFixed(1) + "K" : "$" + n.toFixed(2);
+const toast = (m) => { const t = $("toast"); t.textContent = m; t.style.display = "block"; setTimeout(() => t.style.display = "none", 4000); };
+
+async function ethPrice() {
+  const srcs = [
+    ["https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd", (j) => j.ethereum.usd],
+    ["https://api.coinbase.com/v2/prices/ETH-USD/spot", (j) => +j.data.amount],
+    ["https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT", (j) => +j.price],
+  ];
+  for (const [u, f] of srcs) { try { const r = await fetch(u); ethUsd = f(await r.json()); return; } catch (e) {} }
+}
+
+const pagePath = location.pathname.match(/^\/t\/(0x[0-9a-fA-F]{40})$/);
+const pageToken = pagePath ? pagePath[1] : null;
+
+async function init() {
+  const cfg = await (await fetch("/config")).json();
+  PAD_ADDR = cfg.pad;
+  reader = new E.JsonRpcProvider(RPC);
+  pad = new E.Contract(PAD_ADDR, PAD_ABI, reader);
+  await ethPrice();
+  try { $("feeShow").textContent = E.formatEther(await pad.creationFee()); } catch (e) {}
+  await loadTokens();
+  if (pageToken) {
+    document.getElementById("homeView").style.display = "none";
+    document.querySelector(".feed").style.display = "none";
+    renderTokenPage();
+    setInterval(async () => { await loadTokens(); renderTokenPage(true); }, 20000);
+  } else {
+    loadFeed();
+    setInterval(loadTokens, 20000);
+  }
+  setInterval(ethPrice, 60000);
+}
+
+async function renderTokenPage(soft) {
+  const t = tokens.find((x) => x.addr.toLowerCase() === pageToken.toLowerCase());
+  const view = $("tokenView");
+  view.style.display = "block";
+  if (!t) { view.innerHTML = `<a class="back" href="/">← back</a><div class="empty">token not found on this pad</div>`; return; }
+  currentToken = t;
+  if (!soft) {
+    view.innerHTML = `
+      <a class="back" href="/">← all tokens</a>
+      <div class="tpHead">${avatarHtml(t, 52)}<div>
+        <div class="tpName">${t.name} <span style="color:var(--faint);font-size:14px">$${t.symbol}</span></div>
+        ${socialsHtml(t)}
+      </div>
+      <div class="taxBadge ${taxClass(t.tax)}" style="margin-left:auto">${t.tax}% sell tax</div></div>
+      <div class="tpAddr"><span onclick="navigator.clipboard.writeText('${t.addr}');toast('address copied')">${t.addr} ⧉</span> · <a class="explorer" href="${EXPLORER}/address/${t.addr}" target="_blank" rel="noopener">view on explorer ↗</a></div>
+      <div class="tpGrid">
+        <div class="panel">
+          <div class="chartWrap"><svg id="chartSvg" viewBox="0 0 600 240" preserveAspectRatio="none"></svg><div class="chartEmpty" id="chartEmpty" style="display:none">chart starts filling from launch — check back soon</div></div>
+          <div class="heroStats" style="margin-top:14px">
+            <div><span class="lbl">mcap</span><span class="val" id="tpMcap"></span></div>
+            <div><span class="lbl">raised</span><span class="val" id="tpRaised"></span></div>
+            <div><span class="lbl">bonded</span><span class="val" id="tpBonded"></span></div>
+          </div>
+          <div class="trades" id="tpTrades"></div>
+        </div>
+        <div class="panel" id="tpPanel"></div>
+      </div>`;
+    fillTradePanel(t);
+    drawChart(t);
+    loadTrades(t);
+  } else {
+    const el = (id) => $(id);
+    if (el("tpMcap")) { el("tpMcap").textContent = fmtUsd(t.mcapUsd); el("tpRaised").textContent = t.realEth.toFixed(3) + " ETH"; el("tpBonded").textContent = t.migrated ? "✓" : t.prog.toFixed(1) + "%"; }
+    drawChart(t);
+  }
+  $("tpMcap").textContent = fmtUsd(t.mcapUsd);
+  $("tpRaised").textContent = t.realEth.toFixed(3) + " ETH";
+  $("tpBonded").textContent = t.migrated ? "migrated ✓" : t.prog.toFixed(1) + "%";
+}
+
+async function fillTradePanel(t) {
+  let bal = null;
+  if (wallet) {
+    try { bal = await new E.Contract(t.addr, TOK_ABI, reader).balanceOf(wallet); } catch (e) {}
+  }
+  const balTxt = bal !== null ? Number(E.formatEther(bal)).toLocaleString(undefined, { maximumFractionDigits: 0 }) : null;
+  $("tpPanel").innerHTML = `
+    ${wallet && wallet.toLowerCase() === t.creator.toLowerCase() ? `<div style="margin-bottom:14px"><button class="btn ghost" style="font-size:12px;padding:7px 12px" onclick="openEditMetaPage()">edit token info</button></div>` : ""}
+    ${t.migrated
+      ? `<div class="note">this token has migrated — trade it on the DEX. sell tax ${t.tax}% applies on the pair.</div>`
+      : `<div class="field"><label>Buy (ETH)</label><input id="buyAmt" placeholder="0.01" inputmode="decimal" oninput="quoteB()"></div>
+         <div class="chips">
+           <button class="chip" onclick="setBuy(0.01)">0.01</button>
+           <button class="chip" onclick="setBuy(0.05)">0.05</button>
+           <button class="chip" onclick="setBuy(0.1)">0.1</button>
+           <button class="chip" onclick="setBuy(0.5)">0.5</button>
+         </div>
+         <div class="quote" id="buyQuote"></div>
+         <div class="field"><label>Sell (${t.symbol})${balTxt !== null ? ` — you hold ${balTxt}` : ""}</label><input id="sellAmt" placeholder="0" inputmode="decimal" oninput="quoteS()"></div>
+         ${bal !== null && bal > 0n ? `<div class="chips">
+           <button class="chip" onclick="setSellPct(25)">25%</button>
+           <button class="chip" onclick="setSellPct(50)">50%</button>
+           <button class="chip" onclick="setSellPct(75)">75%</button>
+           <button class="chip" onclick="setSellPct(100)">100%</button>
+         </div>` : wallet ? "" : `<div class="quote">connect wallet to see your balance</div>`}
+         <div class="quote" id="sellQuote"></div>
+         <div class="row2">
+           <button class="btn" onclick="doBuy()">Buy</button>
+           <button class="btn sellBtn" onclick="doSell()">Sell (−${t.tax}%)</button>
+         </div>`}
+    <div class="status" id="tStatus"></div>`;
+  window._sellBal = bal;
+}
+
+function setBuy(v) { $("buyAmt").value = v; quoteB(); }
+function setSellPct(p) {
+  if (window._sellBal === null || window._sellBal === undefined) return;
+  const amt = (window._sellBal * BigInt(p)) / 100n;
+  const v = E.formatEther(amt);
+  window._exactSell = { v, amt };
+  $("sellAmt").value = v;
+  quoteS();
+}
+function sellAmtWei() {
+  const v = $("sellAmt").value;
+  if (window._exactSell && window._exactSell.v === v) return window._exactSell.amt;
+  return E.parseEther((parseFloat(v) || 0).toString());
+}
+
+function openEditMetaPage() { $("tradeModal").classList.add("open"); openEditMeta(); }
+
+async function drawChart(t) {
+  try {
+    const pts = await (await fetch("/prices/" + t.addr.toLowerCase())).json();
+    const svg = $("chartSvg"); if (!svg) return;
+    if (!pts || pts.length < 2) { $("chartEmpty").style.display = "flex"; svg.innerHTML = ""; return; }
+    $("chartEmpty").style.display = "none";
+    const vals = pts.map((p) => Number(E.formatEther(BigInt(p[1]))));
+    const min = Math.min(...vals), max = Math.max(...vals), span = (max - min) || max * 0.1 || 1;
+    const W = 600, H = 240, PADp = 10;
+    const X = (i) => PADp + (i / (vals.length - 1)) * (W - 2 * PADp);
+    const Y = (v) => H - PADp - ((v - min) / span) * (H - 2 * PADp);
+    let d = `M ${X(0)} ${Y(vals[0])}`;
+    for (let i = 1; i < vals.length; i++) d += ` L ${X(i)} ${Y(vals[i])}`;
+    const up = vals[vals.length - 1] >= vals[0];
+    const col = up ? "#38E07B" : "#FF6B6B";
+    svg.innerHTML = `
+      <path d="${d} L ${X(vals.length - 1)} ${H} L ${X(0)} ${H} Z" fill="${col}18"/>
+      <path d="${d}" fill="none" stroke="${col}" stroke-width="2.5" stroke-linejoin="round"/>`;
+  } catch (e) {}
+}
+
+async function loadTrades(t) {
+  try {
+    const latest = await reader.getBlockNumber();
+    const from = Math.max(0, latest - 40000);
+    const buys = await pad.queryFilter(pad.filters.Buy(t.addr), from, latest);
+    const sells = await pad.queryFilter(pad.filters.Sell(t.addr), from, latest);
+    const evs = [...buys.map((e) => ({ b: e.blockNumber, buy: true, who: e.args.buyer, eth: e.args.ethIn, tx: e.transactionHash })),
+                 ...sells.map((e) => ({ b: e.blockNumber, buy: false, who: e.args.seller, eth: e.args.ethOut, tx: e.transactionHash }))]
+      .sort((a, b) => b.b - a.b).slice(0, 15);
+    const el = $("tpTrades"); if (!el) return;
+    el.innerHTML = evs.length
+      ? `<div style="font-size:12px;color:var(--faint);margin:10px 0 4px">recent trades</div>` + evs.map((e) => `
+        <div class="trade"><a href="${EXPLORER}/tx/${e.tx}" target="_blank" rel="noopener" class="${e.buy ? "buyC" : "sellC"}">${e.buy ? "▲ buy" : "▼ sell"} ↗</a>
+        <a href="${EXPLORER}/address/${e.who}" target="_blank" rel="noopener">${short(e.who)}</a><span>${Number(E.formatEther(e.eth)).toFixed(4)} ETH</span></div>`).join("")
+      : "";
+  } catch (e) {}
+}
+
+async function loadTokens() {
+  try {
+    try { metaMap = await (await fetch("/meta")).json(); } catch (e) {}
+    const n = Number(await pad.tokenCount());
+    const addrs = await Promise.all([...Array(n)].map((_, i) => pad.allTokens(i)));
+    tokens = await Promise.all(addrs.map(async (a, i) => {
+      const t = new E.Contract(a, TOK_ABI, reader);
+      const [name, symbol, curve, price, prog, taxBps] = await Promise.all([
+        t.name(), t.symbol(), pad.curves(a), pad.priceWei(a), pad.progress(a), t.sellTaxBps()
+      ]);
+      const priceEth = Number(E.formatEther(price));
+      const mcapUsd = priceEth * 1e9 * ethUsd;
+      return { addr: a, i, name, symbol, migrated: curve.migrated, realEth: Number(E.formatEther(curve.realEth)),
+               priceEth, mcapUsd, prog: Number(prog) / 100, tax: curve.migrated ? Number(taxBps) / 100 : 15,
+               creator: curve.creator, meta: metaMap[a.toLowerCase()] || {} };
+    }));
+    render();
+  } catch (e) { console.error(e); }
+}
+
+function taxClass(t) { return t >= 10 ? "hot" : t > 3.5 ? "mid" : "low"; }
+function hueOf(s) { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) % 360; return h; }
+function avatarHtml(t, size) {
+  const fallback = `this.outerHTML='<div class=&quot;avatar&quot; style=&quot;width:${size}px;height:${size}px;background:linear-gradient(135deg,hsl(${hueOf(t.symbol)} 70% 18%),hsl(${hueOf(t.symbol)} 80% 32%))&quot;>${t.symbol.slice(0,2)}</div>'`;
+  if (t.meta.image) return `<img src="${t.meta.image}" width="${size}" height="${size}" style="border-radius:13px;object-fit:cover" onerror="${fallback}">`;
+  return `<div class="avatar" style="width:${size}px;height:${size}px;background:linear-gradient(135deg,hsl(${hueOf(t.symbol)} 70% 18%),hsl(${hueOf(t.symbol)} 80% 32%))">${t.symbol.slice(0,2)}</div>`;
+}
+function socialsHtml(t) {
+  const m = t.meta, L = [];
+  if (m.telegram) L.push(`<a href="${m.telegram}" target="_blank" rel="noopener">telegram</a>`);
+  if (m.x) L.push(`<a href="${m.x}" target="_blank" rel="noopener">x</a>`);
+  if (m.website) L.push(`<a href="${m.website}" target="_blank" rel="noopener">website</a>`);
+  return L.length ? `<div class="socials">${L.join(" · ")}</div>` : "";
+}
+
+function render() {
+  const g = $("grid");
+  let list = [...tokens];
+  if (searchQ) list = list.filter((t) => t.name.toLowerCase().includes(searchQ) || t.symbol.toLowerCase().includes(searchQ) || t.addr.toLowerCase().includes(searchQ));
+  if (tab === "trending") list.sort((a, b) => b.realEth - a.realEth);
+  if (tab === "new") list.sort((a, b) => b.i - a.i);
+  if (tab === "bonding") list = list.filter((t) => !t.migrated).sort((a, b) => b.prog - a.prog);
+
+  $("empty").style.display = tokens.length ? "none" : "block";
+  g.innerHTML = list.map((t) => `
+    <div class="card" onclick="location.href='/t/${t.addr}'">
+      <div class="cardTop">
+        ${avatarHtml(t, 42)}
+        <div class="cardName"><div class="nm">${t.name}</div><div class="tk">$${t.symbol}</div></div>
+        <div class="taxBadge ${taxClass(t.tax)}">${t.tax}% tax</div>
+      </div>
+      <div class="cardStats">
+        <div><span class="lbl">mcap</span><span class="val">${fmtUsd(t.mcapUsd)}</span></div>
+        <div><span class="lbl">raised</span><span class="val">${t.realEth.toFixed(3)} ETH</span></div>
+      </div>
+      <div class="bondRow">
+        <div class="miniBar wide"><div style="width:${Math.min(100, t.prog)}%"></div></div>
+        <span class="bondPct">${t.migrated ? "migrated ✓" : t.prog.toFixed(1) + "% bonded"}</span>
+      </div>
+    </div>`).join("");
+
+  const top = [...tokens].filter((t) => !t.migrated).sort((a, b) => b.prog - a.prog)[0];
+  const h = $("hero");
+  if (top) {
+    h.style.display = "block";
+    const R = 62, C = 2 * Math.PI * R, frac = top.tax / 15;
+    h.innerHTML = `
+      <div class="eyebrow"><span class="dot"></span>Bonding now</div>
+      <div class="heroCard" onclick="location.href='/t/${top.addr}'">
+        <div class="heroLeft">
+          <div class="heroName" style="display:flex;align-items:center;gap:12px">${avatarHtml(top, 44)}${top.name}</div>
+          <div class="heroTick">$${top.symbol} · Robinhood Chain</div>
+          <div class="heroStats">
+            <div><span class="lbl">market cap</span><span class="val">${fmtUsd(top.mcapUsd)}</span></div>
+            <div><span class="lbl">bonded</span><span class="val">${top.prog.toFixed(1)}%</span></div>
+            <div><span class="lbl">raised</span><span class="val">${top.realEth.toFixed(3)} ETH</span></div>
+          </div>
+        </div>
+        <div class="dial">
+          <svg viewBox="0 0 160 160" width="160" height="160">
+            <circle cx="80" cy="80" r="${R}" fill="none" stroke="#16211B" stroke-width="10"/>
+            <circle cx="80" cy="80" r="${R}" fill="none" stroke="url(#g)" stroke-width="10" stroke-linecap="round"
+              stroke-dasharray="${C}" stroke-dashoffset="${C * (1 - frac)}" transform="rotate(-90 80 80)"/>
+            <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#38E07B"/><stop offset="100%" stop-color="#B8F5CF"/>
+            </linearGradient></defs>
+            <text x="80" y="74" text-anchor="middle" class="dialNum">${top.tax}%</text>
+            <text x="80" y="96" text-anchor="middle" class="dialSub">SELL TAX</text>
+          </svg>
+          <div class="dialNext">drops to <b>7%</b> at migration
+            <div class="miniBar"><div style="width:${Math.min(100, top.prog)}%"></div></div>
+          </div>
+        </div>
+      </div>`;
+  } else h.style.display = "none";
+}
+
+async function loadFeed() {
+  try {
+    const latest = await reader.getBlockNumber();
+    const from = Math.max(0, latest - 8000);
+    const buys = await pad.queryFilter(pad.filters.Buy(), from, latest);
+    const sells = await pad.queryFilter(pad.filters.Sell(), from, latest);
+    const evs = [...buys.map((e) => ({ b: e.blockNumber, h: `<span class="buyC">▲ ${short(e.args.buyer)}</span> bought ${Number(E.formatEther(e.args.ethIn)).toFixed(4)} ETH` })),
+                 ...sells.map((e) => ({ b: e.blockNumber, h: `<span class="sellC">▼ ${short(e.args.seller)}</span> sold for ${Number(E.formatEther(e.args.ethOut)).toFixed(4)} ETH <span class="jeet">· paid jeet tax</span>` }))]
+      .sort((a, b) => b.b - a.b).slice(0, 12);
+    if (evs.length) { $("feed").style.display = "flex"; $("feedInner").innerHTML = evs.map((e) => `<span>${e.h}</span>`).join(""); }
+  } catch (e) {}
+}
+
+// ---- wallet ----
+async function connect() {
+  if (!window.ethereum) { toast("no wallet extension found — install MetaMask"); return; }
+  const bp = new E.BrowserProvider(window.ethereum);
+  await bp.send("eth_requestAccounts", []);
+  try {
+    await bp.send("wallet_switchEthereumChain", [{ chainId: CHAIN_HEX }]);
+  } catch (e) {
+    await bp.send("wallet_addEthereumChain", [{ chainId: CHAIN_HEX, chainName: "Robinhood Chain",
+      rpcUrls: [RPC], nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 } }]);
+  }
+  signer = await bp.getSigner();
+  wallet = await signer.getAddress();
+  $("connectBtn").textContent = short(wallet);
+  if (pageToken && currentToken) fillTradePanel(currentToken);
+}
+async function needWallet() { if (!signer) await connect(); return !!signer; }
+
+// ---- launch ----
+function openLaunch() { $("launchModal").classList.add("open"); }
+function closeModals() { document.querySelectorAll(".modalBg").forEach((m) => m.classList.remove("open")); }
+
+async function doLaunch() {
+  if (!(await needWallet())) return;
+  const name = $("lName").value.trim(), tick = $("lTick").value.trim().toUpperCase();
+  if (!name || !tick) { toast("name and ticker required"); return; }
+  const st = $("lStatus"); st.className = "status"; st.textContent = "confirm in wallet…";
+  $("launchGo").disabled = true;
+  try {
+    const fee = await pad.creationFee();
+    const buyEth = parseFloat($("lBuy").value) || 0;
+    const value = fee + E.parseEther(buyEth.toString());
+    st.textContent = "mining your …600d address…";
+    await new Promise((r) => setTimeout(r, 30)); // let the status paint
+    const initHash = await pad.tokenInitHash(name, tick, wallet);
+    let salt;
+    const base = BigInt(E.hexlify(E.randomBytes(16)));
+    for (let i = 0n; ; i++) {
+      const cand = E.zeroPadValue(E.toBeHex(base + i), 32);
+      if (E.getCreate2Address(PAD_ADDR, cand, initHash).toLowerCase().endsWith("600d")) { salt = cand; break; }
+    }
+    st.textContent = "confirm in wallet…";
+    const tx = await pad.connect(signer).createToken(name, tick, salt, { value });
+    st.textContent = "launching… " + tx.hash;
+    const rc = await tx.wait();
+    let newTok = null;
+    for (const log of rc.logs) {
+      try { const p = pad.interface.parseLog(log); if (p && p.name === "TokenCreated") { newTok = p.args.token; break; } } catch (e) {}
+    }
+    const img = $("lImg").value.trim(), tg = $("lTg").value.trim(), xx = $("lX").value.trim(), web = $("lWeb").value.trim();
+    if (newTok && (img || tg || xx || web || pickedImage.l)) {
+      st.textContent = "sign to attach your token info (free, no gas)…";
+      await submitMeta(newTok, { image: img, telegram: tg, x: xx, website: web, imageData: pickedImage.l });
+      pickedImage.l = null;
+    }
+    st.className = "status ok"; st.textContent = "✅ launched!";
+    closeModals(); toast(`$${tick} is live 🏹`);
+    await loadTokens();
+  } catch (e) { st.className = "status err"; st.textContent = e.shortMessage || e.message; }
+  $("launchGo").disabled = false;
+}
+
+// ---- trade ----
+async function openTrade(addr) {
+  currentToken = tokens.find((t) => t.addr === addr);
+  const t = currentToken;
+  $("tradeInner").innerHTML = `
+    <button class="closeX" onclick="closeModals()">✕</button>
+    <div class="mTitle" style="display:flex;align-items:center;gap:10px">${avatarHtml(t, 36)}${t.name} <span style="color:var(--faint);font-size:13px">$${t.symbol}</span></div>
+    <div class="mSub">${t.addr}</div>
+    ${socialsHtml(t)}
+    ${wallet && wallet.toLowerCase() === t.creator.toLowerCase() ? `<div style="margin-bottom:14px"><button class="btn ghost" style="font-size:12px;padding:7px 12px" onclick="openEditMeta()">edit token info</button></div>` : ""}
+    <div class="heroStats" style="margin-bottom:18px">
+      <div><span class="lbl">mcap</span><span class="val">${fmtUsd(t.mcapUsd)}</span></div>
+      <div><span class="lbl">sell tax</span><span class="val">${t.tax}%</span></div>
+      <div><span class="lbl">bonded</span><span class="val">${t.migrated ? "✓" : t.prog.toFixed(1) + "%"}</span></div>
+    </div>
+    ${t.migrated
+      ? `<div class="note">this token has migrated — trade it on the DEX. sell tax ${t.tax}% applies on the pair.</div>`
+      : `<div class="field"><label>Buy (ETH)</label><input id="buyAmt" placeholder="0.01" inputmode="decimal" oninput="quoteB()"></div>
+         <div class="quote" id="buyQuote"></div>
+         <div class="field"><label>Sell (${t.symbol})</label><input id="sellAmt" placeholder="0" inputmode="decimal" oninput="quoteS()"></div>
+         <div class="quote" id="sellQuote"></div>
+         <div class="row2">
+           <button class="btn" onclick="doBuy()">Buy</button>
+           <button class="btn sellBtn" onclick="doSell()">Sell (−${t.tax}%)</button>
+         </div>`}
+    <div class="status" id="tStatus"></div>`;
+  $("tradeModal").classList.add("open");
+}
+
+async function quoteB() {
+  const v = parseFloat($("buyAmt").value);
+  if (!v) { $("buyQuote").textContent = ""; return; }
+  try { const out = await pad.quoteBuy(currentToken.addr, E.parseEther(v.toString()));
+    $("buyQuote").textContent = "≈ " + Number(E.formatEther(out)).toLocaleString(undefined, { maximumFractionDigits: 0 }) + " " + currentToken.symbol;
+  } catch (e) {}
+}
+async function quoteS() {
+  const v = parseFloat($("sellAmt").value);
+  if (!v) { $("sellQuote").textContent = ""; return; }
+  try { const out = await pad.quoteSell(currentToken.addr, sellAmtWei());
+    $("sellQuote").textContent = "≈ " + Number(E.formatEther(out)).toFixed(5) + " ETH after " + currentToken.tax + "% jeet tax";
+  } catch (e) {}
+}
+
+async function doBuy() {
+  if (!(await needWallet())) return;
+  const v = parseFloat($("buyAmt").value); if (!v) return;
+  const st = $("tStatus"); st.className = "status"; st.textContent = "confirm in wallet…";
+  try {
+    const tx = await pad.connect(signer).buy(currentToken.addr, { value: E.parseEther(v.toString()) });
+    st.textContent = "buying… "; await tx.wait();
+    st.className = "status ok"; st.textContent = "✅ bought"; loadTokens();
+  } catch (e) { st.className = "status err"; st.textContent = e.shortMessage || e.message; }
+}
+
+async function doSell() {
+  if (!(await needWallet())) return;
+  const v = parseFloat($("sellAmt").value); if (!v) return;
+  const st = $("tStatus"); st.className = "status";
+  try {
+    const amt = sellAmtWei();
+    const tok = new E.Contract(currentToken.addr, TOK_ABI, signer);
+    const allow = await tok.allowance(wallet, PAD_ADDR);
+    if (allow < amt) { st.textContent = "approve first — confirm in wallet…"; const a = await tok.approve(PAD_ADDR, E.MaxUint256); await a.wait(); }
+    st.textContent = "confirm sell in wallet…";
+    const tx = await pad.connect(signer).sell(currentToken.addr, amt);
+    st.textContent = "selling…"; await tx.wait();
+    st.className = "status ok"; st.textContent = "✅ sold (15% tax applied)"; loadTokens();
+  } catch (e) { st.className = "status err"; st.textContent = e.shortMessage || e.message; }
+}
+
+let pickedImage = { l: null, e: null };
+
+function pickImage(input, which) {
+  const f = input.files && input.files[0];
+  if (f) handleImageFile(f, which);
+}
+function handleImageFile(f, which) {
+  if (!/^image\/(png|jpeg|webp|gif)$/.test(f.type)) { toast("png / jpg / webp / gif only"); return; }
+  if (f.size > 2 * 1024 * 1024) { toast("image over 2MB — pick a smaller one"); return; }
+  const r = new FileReader();
+  r.onload = () => {
+    pickedImage[which] = r.result;
+    const img = $(which + "Preview"), txt = $(which + "DropTxt");
+    if (img) { img.src = r.result; img.style.display = "block"; }
+    if (txt) txt.textContent = f.name;
+  };
+  r.readAsDataURL(f);
+}
+function wireDrop(id, which) {
+  const el = $(id); if (!el) return;
+  el.addEventListener("dragover", (e) => { e.preventDefault(); el.classList.add("over"); });
+  el.addEventListener("dragleave", () => el.classList.remove("over"));
+  el.addEventListener("drop", (e) => {
+    e.preventDefault(); el.classList.remove("over");
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) handleImageFile(f, which);
+  });
+}
+wireDrop("lDrop", "l");
+
+async function submitMeta(token, m) {
+  const sig = await signer.signMessage("hoodpad-meta:" + token.toLowerCase());
+  const r = await fetch("/meta", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token, ...m, sig }) });
+  if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || "info save failed"); }
+}
+
+function openEditMeta() {
+  const t = currentToken, m = t.meta;
+  $("tradeInner").innerHTML = `
+    <button class="closeX" onclick="closeModals()">✕</button>
+    <div class="mTitle">Edit info · $${t.symbol}</div>
+    <div class="mSub">${t.addr}</div>
+    <div class="field"><label>Logo (drag an image here or click)</label>
+      <div class="drop" id="eDrop" onclick="document.getElementById('eFile').click()">
+        <span id="eDropTxt">drop image / click to choose</span>
+        <img id="ePreview" style="display:none" ${m.image ? `src="${m.image}" style="display:block"` : ""}>
+      </div>
+      <input type="file" id="eFile" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none" onchange="pickImage(this, 'e')">
+    </div>
+    <div class="field"><label>…or logo image link</label><input id="eImg" value="${m.image && !m.image.startsWith("/img/") ? m.image : ""}" placeholder="https://i.imgur.com/..."></div>
+    <div class="field"><label>Telegram</label><input id="eTg" value="${m.telegram || ""}" placeholder="https://t.me/..."></div>
+    <div class="field"><label>X / Twitter</label><input id="eX" value="${m.x || ""}" placeholder="https://x.com/..."></div>
+    <div class="field"><label>Website</label><input id="eWeb" value="${m.website || ""}" placeholder="https://..."></div>
+    <button class="btn" style="width:100%;padding:13px" onclick="doEditMeta()">Save (free, sign only)</button>
+    <div class="status" id="eStatus"></div>`;
+  wireDrop("eDrop", "e");
+}
+
+async function doEditMeta() {
+  if (!(await needWallet())) return;
+  const st = $("eStatus"); st.className = "status"; st.textContent = "sign in wallet…";
+  try {
+    const m = currentToken.meta;
+    let image = $("eImg").value.trim();
+    if (!image && !pickedImage.e && m.image && m.image.startsWith("/img/")) image = m.image; // keep hosted logo
+    await submitMeta(currentToken.addr, {
+      image, telegram: $("eTg").value.trim(),
+      x: $("eX").value.trim(), website: $("eWeb").value.trim(),
+      imageData: pickedImage.e,
+    });
+    pickedImage.e = null;
+    st.className = "status ok"; st.textContent = "✅ saved";
+    await loadTokens(); openTrade(currentToken.addr);
+  } catch (e) { st.className = "status err"; st.textContent = e.message; }
+}
+
+const EXPLORER = "https://robinhoodchain.blockscout.com";
+let searchQ = "";
+function doSearch(v) {
+  searchQ = v.trim().toLowerCase();
+  if (/^0x[0-9a-f]{40}$/.test(searchQ)) { location.href = "/t/" + searchQ; return; }
+  if (!pageToken) render();
+}
+function searchGo(v) {
+  v = v.trim();
+  if (/^0x[0-9a-fA-F]{40}$/.test(v)) location.href = "/t/" + v;
+}
+
+function setTab(t) {
+  tab = t;
+  document.querySelectorAll(".tabBtn").forEach((b) => b.classList.toggle("on", b.dataset.tab === t));
+  render();
+}
+
+document.querySelectorAll(".modalBg").forEach((m) => m.addEventListener("click", (e) => { if (e.target === m) closeModals(); }));
+init();
+</script>
+</body>
+</html>
