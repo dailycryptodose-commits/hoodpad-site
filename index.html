@@ -480,7 +480,6 @@ async function fillTradePanel(t) {
     try { ethBal = await reader.getBalance(wallet); } catch (e) {}
   }
   window._ethBal = ethBal;
-  const balTxt = bal !== null ? Number(E.formatEther(bal)).toLocaleString(undefined, { maximumFractionDigits: 0 }) : null;
   $("tpPanel").innerHTML = `
     ${wallet && wallet.toLowerCase() === t.creator.toLowerCase() ? `<div style="margin-bottom:14px"><button class="btn ghost" style="font-size:12px;padding:7px 12px" onclick="openEditMetaPage()">edit token info</button></div>` : ""}
     ${t.migrated
@@ -497,7 +496,7 @@ async function fillTradePanel(t) {
            <button class="chip" onclick="setBuy(1)">1</button>
          </div>
          <div class="quote" id="buyQuote"></div>
-         <div class="field"><label>Sell (${t.symbol})${balTxt !== null ? ` — you hold ${balTxt}` : ""}</label><input id="sellAmt" placeholder="0" inputmode="decimal" oninput="quoteS()"></div>
+         <div class="field"><label>Sell (${t.symbol})</label><input id="sellAmt" placeholder="0" inputmode="decimal" oninput="quoteS()"></div>
          <div class="slideRow"><input type="range" min="0" max="100" value="0" id="sellSlide" oninput="slideSell(this.value)" ${bal !== null && bal > 0n ? "" : "disabled"}><span class="slidePct" id="sellSlidePct">0%</span><span class="slideUsd" id="sellUsd"></span></div>
          ${bal !== null && bal > 0n ? `<div class="quickLbl">quick sell</div>
          <div class="chips">
