@@ -26,7 +26,7 @@
   .feed{display:flex;overflow:hidden;white-space:nowrap;padding:9px 0;border-bottom:1px solid var(--line);font-family:'JetBrains Mono';font-size:11.5px;color:var(--dim)}
   .feedInner{display:flex;gap:28px;animation:mq 30s linear infinite;padding-left:100%}
   @keyframes mq{from{transform:translateX(0)}to{transform:translateX(-100%)}}
-  .buyC{color:var(--green)}.sellC{color:var(--red)}.jeet{color:var(--amber)}
+  .buyC{color:var(--green)}.sellC{color:var(--red)}
 
   .wrap{max-width:1080px;margin:0 auto}
   .hero{padding:26px 18px 8px}
@@ -160,10 +160,10 @@
   <div class="empty" id="empty" style="display:none">no tokens yet — be the first to launch one</div>
 
   <div class="tiers">
-    <span>How the jeet tax works:</span>
-    <span class="tHot"><b>15%</b> while bonding</span>
-    <span class="tMid"><b>7%</b> after migration</span>
-    <span class="tLow"><b>3%</b> past the maturity cap — forever</span>
+    <span>Fees:</span>
+    <span class="tLow"><b>1%</b> per trade</span>
+    <span class="tMid"><b>0.0005 ETH</b> to launch</span>
+    <span>liquidity locked forever at migration</span>
   </div>
 </div>
 
@@ -231,9 +231,7 @@ const TOK_ABI = [
   "function symbol() view returns (string)",
   "function balanceOf(address) view returns (uint)",
   "function allowance(address, address) view returns (uint)",
-  "function approve(address, uint) returns (bool)",
-  "function sellTaxBps() view returns (uint16)",
-  "function migrated() view returns (bool)"
+  "function approve(address, uint) returns (bool)"
 ];
 const SUPPLY = E.parseEther("1000000000");
 
@@ -291,7 +289,7 @@ async function renderTokenPage(soft) {
         <div class="tpName">${t.name} <span style="color:var(--faint);font-size:14px">$${t.symbol}</span></div>
         ${socialsHtml(t)}
       </div>
-      <div class="taxBadge ${taxClass(t.tax)}" style="margin-left:auto">${t.tax}% sell tax</div></div>
+      <div class="taxBadge low" style="margin-left:auto">${t.migrated ? "migrated" : t.prog.toFixed(1) + "% bonded"}</div></div>
       <div class="tpAddr"><span onclick="navigator.clipboard.writeText('${t.addr}');toast('address copied')">${t.addr} ⧉</span> · <a class="explorer" href="${EXPLORER}/address/${t.addr}" target="_blank" rel="noopener">view on explorer ↗</a></div>
       <div class="tpGrid">
         <div class="panel">
@@ -327,7 +325,7 @@ async function fillTradePanel(t) {
   $("tpPanel").innerHTML = `
     ${wallet && wallet.toLowerCase() === t.creator.toLowerCase() ? `<div style="margin-bottom:14px"><button class="btn ghost" style="font-size:12px;padding:7px 12px" onclick="openEditMetaPage()">edit token info</button></div>` : ""}
     ${t.migrated
-      ? `<div class="note">this token has migrated — trade it on the DEX. sell tax ${t.tax}% applies on the pair.</div>`
+      ? `<div class="note">this token has migrated — trade it on the DEX.</div>`
       : `<div class="field"><label>Buy (ETH)</label><input id="buyAmt" placeholder="0.01" inputmode="decimal" oninput="quoteB()"></div>
          <div class="chips">
            <button class="chip" onclick="setBuy(0.01)">0.01</button>
@@ -346,7 +344,7 @@ async function fillTradePanel(t) {
          <div class="quote" id="sellQuote"></div>
          <div class="row2">
            <button class="btn" onclick="doBuy()">Buy</button>
-           <button class="btn sellBtn" onclick="doSell()">Sell (−${t.tax}%)</button>
+           <button class="btn sellBtn" onclick="doSell()">Sell</button>
          </div>`}
     <div class="status" id="tStatus"></div>`;
   window._sellBal = bal;
@@ -415,13 +413,13 @@ async function loadTokens() {
     const addrs = await Promise.all([...Array(n)].map((_, i) => pad.allTokens(i)));
     tokens = await Promise.all(addrs.map(async (a, i) => {
       const t = new E.Contract(a, TOK_ABI, reader);
-      const [name, symbol, curve, price, prog, taxBps] = await Promise.all([
-        t.name(), t.symbol(), pad.curves(a), pad.priceWei(a), pad.progress(a), t.sellTaxBps()
+      const [name, symbol, curve, price, prog] = await Promise.all([
+        t.name(), t.symbol(), pad.curves(a), pad.priceWei(a), pad.progress(a)
       ]);
       const priceEth = Number(E.formatEther(price));
       const mcapUsd = priceEth * 1e9 * ethUsd;
       return { addr: a, i, name, symbol, migrated: curve.migrated, realEth: Number(E.formatEther(curve.realEth)),
-               priceEth, mcapUsd, prog: Number(prog) / 100, tax: curve.migrated ? Number(taxBps) / 100 : 15,
+               priceEth, mcapUsd, prog: Number(prog) / 100,
                creator: curve.creator, meta: metaMap[a.toLowerCase()] || {} };
     }));
     render();
@@ -457,7 +455,7 @@ function render() {
       <div class="cardTop">
         ${avatarHtml(t, 42)}
         <div class="cardName"><div class="nm">${t.name}</div><div class="tk">$${t.symbol}</div></div>
-        <div class="taxBadge ${taxClass(t.tax)}">${t.tax}% tax</div>
+
       </div>
       <div class="cardStats">
         <div><span class="lbl">mcap</span><span class="val">${fmtUsd(t.mcapUsd)}</span></div>
@@ -473,7 +471,7 @@ function render() {
   const h = $("hero");
   if (top) {
     h.style.display = "block";
-    const R = 62, C = 2 * Math.PI * R, frac = top.tax / 15;
+    const R = 62, C = 2 * Math.PI * R, frac = Math.min(1, top.prog / 100);
     h.innerHTML = `
       <div class="eyebrow"><span class="dot"></span>Bonding now</div>
       <div class="heroCard" onclick="location.href='/t/${top.addr}'">
@@ -494,10 +492,10 @@ function render() {
             <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
               <stop offset="0%" stop-color="#38E07B"/><stop offset="100%" stop-color="#B8F5CF"/>
             </linearGradient></defs>
-            <text x="80" y="74" text-anchor="middle" class="dialNum">${top.tax}%</text>
-            <text x="80" y="96" text-anchor="middle" class="dialSub">SELL TAX</text>
+            <text x="80" y="74" text-anchor="middle" class="dialNum">${top.prog.toFixed(0)}%</text>
+            <text x="80" y="96" text-anchor="middle" class="dialSub">BONDED</text>
           </svg>
-          <div class="dialNext">drops to <b>7%</b> at migration
+          <div class="dialNext">migrates to the DEX at 100%
             <div class="miniBar"><div style="width:${Math.min(100, top.prog)}%"></div></div>
           </div>
         </div>
@@ -512,7 +510,7 @@ async function loadFeed() {
     const buys = await pad.queryFilter(pad.filters.Buy(), from, latest);
     const sells = await pad.queryFilter(pad.filters.Sell(), from, latest);
     const evs = [...buys.map((e) => ({ b: e.blockNumber, h: `<span class="buyC">▲ ${short(e.args.buyer)}</span> bought ${Number(E.formatEther(e.args.ethIn)).toFixed(4)} ETH` })),
-                 ...sells.map((e) => ({ b: e.blockNumber, h: `<span class="sellC">▼ ${short(e.args.seller)}</span> sold for ${Number(E.formatEther(e.args.ethOut)).toFixed(4)} ETH <span class="jeet">· paid jeet tax</span>` }))]
+                 ...sells.map((e) => ({ b: e.blockNumber, h: `<span class="sellC">▼ ${short(e.args.seller)}</span> sold for ${Number(E.formatEther(e.args.ethOut)).toFixed(4)} ETH` }))]
       .sort((a, b) => b.b - a.b).slice(0, 12);
     if (evs.length) { $("feed").style.display = "flex"; $("feedInner").innerHTML = evs.map((e) => `<span>${e.h}</span>`).join(""); }
   } catch (e) {}
@@ -592,18 +590,18 @@ async function openTrade(addr) {
     ${wallet && wallet.toLowerCase() === t.creator.toLowerCase() ? `<div style="margin-bottom:14px"><button class="btn ghost" style="font-size:12px;padding:7px 12px" onclick="openEditMeta()">edit token info</button></div>` : ""}
     <div class="heroStats" style="margin-bottom:18px">
       <div><span class="lbl">mcap</span><span class="val">${fmtUsd(t.mcapUsd)}</span></div>
-      <div><span class="lbl">sell tax</span><span class="val">${t.tax}%</span></div>
+
       <div><span class="lbl">bonded</span><span class="val">${t.migrated ? "✓" : t.prog.toFixed(1) + "%"}</span></div>
     </div>
     ${t.migrated
-      ? `<div class="note">this token has migrated — trade it on the DEX. sell tax ${t.tax}% applies on the pair.</div>`
+      ? `<div class="note">this token has migrated — trade it on the DEX.</div>`
       : `<div class="field"><label>Buy (ETH)</label><input id="buyAmt" placeholder="0.01" inputmode="decimal" oninput="quoteB()"></div>
          <div class="quote" id="buyQuote"></div>
          <div class="field"><label>Sell (${t.symbol})</label><input id="sellAmt" placeholder="0" inputmode="decimal" oninput="quoteS()"></div>
          <div class="quote" id="sellQuote"></div>
          <div class="row2">
            <button class="btn" onclick="doBuy()">Buy</button>
-           <button class="btn sellBtn" onclick="doSell()">Sell (−${t.tax}%)</button>
+           <button class="btn sellBtn" onclick="doSell()">Sell</button>
          </div>`}
     <div class="status" id="tStatus"></div>`;
   $("tradeModal").classList.add("open");
@@ -620,7 +618,7 @@ async function quoteS() {
   const v = parseFloat($("sellAmt").value);
   if (!v) { $("sellQuote").textContent = ""; return; }
   try { const out = await pad.quoteSell(currentToken.addr, sellAmtWei());
-    $("sellQuote").textContent = "≈ " + Number(E.formatEther(out)).toFixed(5) + " ETH after " + currentToken.tax + "% jeet tax";
+    $("sellQuote").textContent = "≈ " + Number(E.formatEther(out)).toFixed(5) + " ETH";
   } catch (e) {}
 }
 
@@ -647,7 +645,7 @@ async function doSell() {
     st.textContent = "confirm sell in wallet…";
     const tx = await pad.connect(signer).sell(currentToken.addr, amt);
     st.textContent = "selling…"; await tx.wait();
-    st.className = "status ok"; st.textContent = "✅ sold (15% tax applied)"; loadTokens();
+    st.className = "status ok"; st.textContent = "✅ sold"; loadTokens();
   } catch (e) { st.className = "status err"; st.textContent = e.shortMessage || e.message; }
 }
 
