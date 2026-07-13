@@ -165,6 +165,7 @@
   .slideRow{display:flex;align-items:center;gap:12px;margin:-4px 0 14px}
   .slideRow input[type=range]{flex:1;accent-color:var(--green);height:22px;cursor:pointer}
   .slidePct{font-family:'JetBrains Mono';font-size:12px;font-weight:700;color:var(--green);min-width:44px;text-align:right}
+  .slideUsd{font-family:'JetBrains Mono';font-size:11.5px;color:var(--dim);min-width:60px;text-align:right}
   .chips{display:flex;gap:6px;margin:-6px 0 12px}
   .chip{background:#0C1107;border:1px solid var(--line2);color:var(--dim);font-family:'JetBrains Mono';font-size:11px;padding:6px 10px;border-radius:9px}
   .chip:hover{border-color:#3E5C22;color:var(--mint)}
@@ -484,10 +485,10 @@ async function fillTradePanel(t) {
     ${t.migrated
       ? `<div class="note">this token has migrated — trade it on the DEX.</div>`
       : `<div class="field"><label>Buy (ETH)</label><input id="buyAmt" placeholder="0.01" inputmode="decimal" oninput="quoteB()"></div>
-         <div class="slideRow"><input type="range" min="0" max="100" value="0" id="buySlide" oninput="slideBuy(this.value)" ${ethBal === null ? "disabled" : ""}><span class="slidePct" id="buySlidePct">0%</span></div>
+         <div class="slideRow"><input type="range" min="0" max="100" value="0" id="buySlide" oninput="slideBuy(this.value)" ${ethBal === null ? "disabled" : ""}><span class="slidePct" id="buySlidePct">0%</span><span class="slideUsd" id="buyUsd"></span></div>
          <div class="quote" id="buyQuote"></div>
          <div class="field"><label>Sell (${t.symbol})${balTxt !== null ? ` — you hold ${balTxt}` : ""}</label><input id="sellAmt" placeholder="0" inputmode="decimal" oninput="quoteS()"></div>
-         <div class="slideRow"><input type="range" min="0" max="100" value="0" id="sellSlide" oninput="slideSell(this.value)" ${bal !== null && bal > 0n ? "" : "disabled"}><span class="slidePct" id="sellSlidePct">0%</span></div>
+         <div class="slideRow"><input type="range" min="0" max="100" value="0" id="sellSlide" oninput="slideSell(this.value)" ${bal !== null && bal > 0n ? "" : "disabled"}><span class="slidePct" id="sellSlidePct">0%</span><span class="slideUsd" id="sellUsd"></span></div>
          ${wallet ? "" : `<div class="quote">connect wallet to use the sliders</div>`}
          <div class="quote" id="sellQuote"></div>
          <div class="row2">
@@ -525,6 +526,7 @@ function slideBuy(p) {
   const usable = window._ethBal > reserve ? window._ethBal - reserve : 0n;
   const amt = (usable * BigInt(p)) / 100n;
   $("buyAmt").value = (+E.formatEther(amt)).toFixed(5);
+  const u = $("buyUsd"); if (u) u.textContent = ethUsd ? "$" + (Number(E.formatEther(amt)) * ethUsd).toFixed(2) : "";
   quoteB();
 }
 function slideSell(p) {
@@ -937,14 +939,19 @@ async function quoteB() {
   const v = parseFloat($("buyAmt").value);
   if (!v) { $("buyQuote").textContent = ""; return; }
   try { const out = await pad.quoteBuy(currentToken.addr, E.parseEther(v.toString()));
-    $("buyQuote").textContent = "≈ " + Number(E.formatEther(out)).toLocaleString(undefined, { maximumFractionDigits: 0 }) + " " + currentToken.symbol;
+    const usd = ethUsd ? " · $" + (v * ethUsd).toFixed(2) : "";
+    $("buyQuote").textContent = "≈ " + Number(E.formatEther(out)).toLocaleString(undefined, { maximumFractionDigits: 0 }) + " " + currentToken.symbol + usd;
+    const u = $("buyUsd"); if (u && ethUsd) u.textContent = "$" + (v * ethUsd).toFixed(2);
   } catch (e) {}
 }
 async function quoteS() {
   const v = parseFloat($("sellAmt").value);
   if (!v) { $("sellQuote").textContent = ""; return; }
   try { const out = await pad.quoteSell(currentToken.addr, sellAmtWei());
-    $("sellQuote").textContent = "≈ " + Number(E.formatEther(out)).toFixed(5) + " ETH";
+    const eth = Number(E.formatEther(out));
+    const usd = ethUsd ? " ($" + (eth * ethUsd).toFixed(2) + ")" : "";
+    $("sellQuote").textContent = "≈ " + eth.toFixed(5) + " ETH" + usd;
+    const u = $("sellUsd"); if (u && ethUsd) u.textContent = "$" + (eth * ethUsd).toFixed(2);
   } catch (e) {}
 }
 
