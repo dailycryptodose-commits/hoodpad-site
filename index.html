@@ -265,7 +265,6 @@ async function renderStats() {
   document.querySelector(".feed").style.display = "none";
   const s = await (await fetch("/stats")).json();
   const volEth = Number(E.formatEther(BigInt(s.vol)));
-  const feeEth = Number(E.formatEther(BigInt(s.fees)));
   const days = Object.keys(s.daily).sort().slice(-14);
   const dVals = days.map((d) => Number(E.formatEther(BigInt(s.daily[d]))));
   const maxD = Math.max(...dVals, 0.0001);
@@ -290,7 +289,6 @@ async function renderStats() {
       ${card("volume (usd)", fmtUsd(volEth * ethUsd))}
       ${card("trades", s.buys + s.sells)}
       ${card("unique traders", s.traders)}
-      ${card("platform fees earned", feeEth.toFixed(4) + " ETH")}
     </div>
     <div class="panel" style="margin-bottom:14px">
       <div style="font-size:12px;color:var(--faint);margin-bottom:8px">daily volume (ETH, last 14 days)</div>

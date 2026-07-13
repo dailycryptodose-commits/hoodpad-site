@@ -193,7 +193,7 @@ indexStats();
 
 app.get("/stats", (req, res) => {
   res.json({
-    vol: stats.vol, fees: stats.fees, buys: stats.buys, sells: stats.sells,
+    vol: stats.vol, buys: stats.buys, sells: stats.sells,
     launches: stats.launches, migrations: stats.migrations,
     traders: Object.keys(stats.traders).length,
     daily: stats.daily, perToken: stats.perToken,
