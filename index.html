@@ -207,10 +207,11 @@
   <div class="modal">
     <button class="closeX" onclick="closeModals()">✕</button>
     <div class="mTitle">Launch a token</div>
-    <div class="mSub">live in one transaction · creation fee <span id="feeShow">…</span> ETH</div>
+    <div class="mSub">live in one transaction · <span style="white-space:nowrap">creation fee <span id="feeShow">…</span> ETH</span></div>
     <div class="field"><label>Name</label><input id="lName" placeholder="Sherwood" maxlength="32"></div>
     <div class="field"><label>Ticker</label><input id="lTick" placeholder="SHER" maxlength="10" style="text-transform:uppercase"></div>
-    <div class="field"><label>Your first buy (ETH, optional)</label><input id="lBuy" placeholder="0.01" inputmode="decimal"></div>
+    <div class="field"><label>Your first buy (ETH, optional)</label><input id="lBuy" placeholder="0.01" inputmode="decimal" oninput="quoteLaunchBuy()"></div>
+    <div class="quote" id="lBuyQuote"></div>
     <div class="field"><label>Logo (optional — drag an image here or click)</label>
       <div class="drop" id="lDrop" onclick="document.getElementById('lFile').click()">
         <span id="lDropTxt">drop image / click to choose</span>
@@ -218,7 +219,7 @@
       </div>
       <input type="file" id="lFile" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none" onchange="pickImage(this, 'l')">
     </div>
-    <div class="field"><label>…or logo image link (optional)</label><input id="lImg" placeholder="https://i.imgur.com/..."></div>
+
     <div class="field"><label>Telegram (optional)</label><input id="lTg" placeholder="https://t.me/..."></div>
     <div class="field"><label>X / Twitter (optional)</label><input id="lX" placeholder="https://x.com/..."></div>
     <div class="field"><label>Website (optional)</label><input id="lWeb" placeholder="https://..."></div>
@@ -250,6 +251,8 @@ const PAD_ABI = [
   "function quoteBuy(address, uint) view returns (uint)",
   "function quoteSell(address, uint) view returns (uint)",
   "function creationFee() view returns (uint)",
+  "function virtualEth() view returns (uint)",
+  "function buyFeeBps() view returns (uint16)",
   "function migrationEth() view returns (uint)",
   "function createToken(string, string, bytes32) payable returns (address)",
   "function tokenInitHash(string, string, address) view returns (bytes32)",
@@ -474,6 +477,24 @@ async function fillTradePanel(t) {
          </div>`}
     <div class="status" id="tStatus"></div>`;
   window._sellBal = bal;
+}
+
+let curveParams = null;
+async function quoteLaunchBuy() {
+  const q = $("lBuyQuote"); if (!q) return;
+  const v = parseFloat($("lBuy").value);
+  if (!v || v <= 0) { q.textContent = ""; return; }
+  try {
+    if (!curveParams) {
+      const [ve, fee] = await Promise.all([pad.virtualEth(), pad.buyFeeBps()]);
+      curveParams = { V: Number(E.formatEther(ve)), feeBps: Number(fee) };
+    }
+    const C = 800_000_000;
+    const x = v * (1 - curveParams.feeBps / 10000);
+    const out = C - (curveParams.V * C) / (curveParams.V + x);
+    const pct = (out / 1_000_000_000) * 100;
+    q.textContent = "you'll snipe ≈ " + Math.floor(out).toLocaleString() + " tokens (" + pct.toFixed(1) + "% of supply)";
+  } catch (e) { q.textContent = ""; }
 }
 
 function setBuy(v) { $("buyAmt").value = v; quoteB(); }
@@ -734,10 +755,10 @@ async function doLaunch() {
     for (const log of rc.logs) {
       try { const p = pad.interface.parseLog(log); if (p && p.name === "TokenCreated") { newTok = p.args.token; break; } } catch (e) {}
     }
-    const img = $("lImg").value.trim(), tg = $("lTg").value.trim(), xx = $("lX").value.trim(), web = $("lWeb").value.trim();
-    if (newTok && (img || tg || xx || web || pickedImage.l)) {
+    const tg = $("lTg").value.trim(), xx = $("lX").value.trim(), web = $("lWeb").value.trim();
+    if (newTok && (tg || xx || web || pickedImage.l)) {
       st.textContent = "sign to attach your token info (free, no gas)…";
-      await submitMeta(newTok, { image: img, telegram: tg, x: xx, website: web, imageData: pickedImage.l });
+      await submitMeta(newTok, { image: "", telegram: tg, x: xx, website: web, imageData: pickedImage.l });
       pickedImage.l = null;
     }
     st.className = "status ok"; st.textContent = "✅ launched!";
@@ -868,7 +889,7 @@ function openEditMeta() {
       </div>
       <input type="file" id="eFile" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none" onchange="pickImage(this, 'e')">
     </div>
-    <div class="field"><label>…or logo image link</label><input id="eImg" value="${m.image && !m.image.startsWith("/img/") ? m.image : ""}" placeholder="https://i.imgur.com/..."></div>
+
     <div class="field"><label>Telegram</label><input id="eTg" value="${m.telegram || ""}" placeholder="https://t.me/..."></div>
     <div class="field"><label>X / Twitter</label><input id="eX" value="${m.x || ""}" placeholder="https://x.com/..."></div>
     <div class="field"><label>Website</label><input id="eWeb" value="${m.website || ""}" placeholder="https://..."></div>
@@ -882,8 +903,7 @@ async function doEditMeta() {
   const st = $("eStatus"); st.className = "status"; st.textContent = "sign in wallet…";
   try {
     const m = currentToken.meta;
-    let image = $("eImg").value.trim();
-    if (!image && !pickedImage.e && m.image && m.image.startsWith("/img/")) image = m.image; // keep hosted logo
+    let image = (!pickedImage.e && m.image) ? m.image : ""; // keep current logo unless replaced
     await submitMeta(currentToken.addr, {
       image, telegram: $("eTg").value.trim(),
       x: $("eX").value.trim(), website: $("eWeb").value.trim(),
