@@ -182,8 +182,11 @@ try { stats = Object.assign(stats, JSON.parse(fs.readFileSync(STATS_FILE, "utf8"
 if (!stats.traderVol || !stats.creatorLaunches) { // points upgrade -> full reindex
   stats = { lastBlock: 0, vol: "0", fees: "0", buys: 0, sells: 0, launches: 0, migrations: 0, traders: {}, daily: {}, perToken: {}, traderVol: {}, creatorLaunches: {} };
 }
+if (stats.pad !== PAD) { // pad redeployed -> start stats fresh
+  stats = { pad: PAD, lastBlock: 0, vol: "0", fees: "0", buys: 0, sells: 0, launches: 0, migrations: 0, traders: {}, daily: {}, perToken: {}, traderVol: {}, creatorLaunches: {}, holders: {}, tokenList: [], creatorOf: {} };
+}
 if (!stats.holders || !stats.tokenList) { // holders upgrade -> full reindex
-  stats = { lastBlock: 0, vol: "0", fees: "0", buys: 0, sells: 0, launches: 0, migrations: 0, traders: {}, daily: {}, perToken: {}, traderVol: {}, creatorLaunches: {}, holders: {}, tokenList: [], creatorOf: {} };
+  stats = { pad: PAD, lastBlock: 0, vol: "0", fees: "0", buys: 0, sells: 0, launches: 0, migrations: 0, traders: {}, daily: {}, perToken: {}, traderVol: {}, creatorLaunches: {}, holders: {}, tokenList: [], creatorOf: {} };
 }
 const TRANSFER_TOPIC = ethers.id("Transfer(address,address,uint256)");
 
