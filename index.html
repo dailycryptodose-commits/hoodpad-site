@@ -578,8 +578,16 @@ function setSellPct(p) {
 }
 function sellAmtWei() {
   const v = $("sellAmt").value;
-  if (window._exactSell && window._exactSell.v === v) return window._exactSell.amt;
-  return E.parseEther((parseFloat(v) || 0).toString());
+  let amt;
+  if (window._exactSell && window._exactSell.v === v) amt = window._exactSell.amt;
+  else amt = E.parseEther((parseFloat(v) || 0).toString());
+  // full exits: shave 0.001% so curve rounding dust can't revert the sell
+  const bal = window._sellBal;
+  if (bal && amt >= bal) {
+    const shave = bal / 100000n > 0n ? bal / 100000n : 1n;
+    amt = bal - shave;
+  }
+  return amt;
 }
 
 async function fillStatRail(t) {
