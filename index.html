@@ -101,6 +101,9 @@
   .socials{font-family:'JetBrains Mono';font-size:12px;margin:-8px 0 16px}
   .socials a{color:var(--green);text-decoration:none}
   .socials a:hover{text-decoration:underline}
+  .drop{border:1.5px dashed var(--line2);border-radius:14px;padding:18px;text-align:center;color:var(--faint);font-size:12.5px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:12px;min-height:64px;transition:border-color .2s}
+  .drop.over{border-color:var(--green);color:var(--mint)}
+  .drop img{width:48px;height:48px;border-radius:12px;object-fit:cover}
 </style>
 </head>
 <body>
@@ -144,7 +147,14 @@
     <div class="field"><label>Name</label><input id="lName" placeholder="Sherwood" maxlength="32"></div>
     <div class="field"><label>Ticker</label><input id="lTick" placeholder="SHER" maxlength="10" style="text-transform:uppercase"></div>
     <div class="field"><label>Your first buy (ETH, optional)</label><input id="lBuy" placeholder="0.01" inputmode="decimal"></div>
-    <div class="field"><label>Logo image link (optional)</label><input id="lImg" placeholder="https://i.imgur.com/..."></div>
+    <div class="field"><label>Logo (optional — drag an image here or click)</label>
+      <div class="drop" id="lDrop" onclick="document.getElementById('lFile').click()">
+        <span id="lDropTxt">drop image / click to choose</span>
+        <img id="lPreview" style="display:none">
+      </div>
+      <input type="file" id="lFile" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none" onchange="pickImage(this, 'l')">
+    </div>
+    <div class="field"><label>…or logo image link (optional)</label><input id="lImg" placeholder="https://i.imgur.com/..."></div>
     <div class="field"><label>Telegram (optional)</label><input id="lTg" placeholder="https://t.me/..."></div>
     <div class="field"><label>X / Twitter (optional)</label><input id="lX" placeholder="https://x.com/..."></div>
     <div class="field"><label>Website (optional)</label><input id="lWeb" placeholder="https://..."></div>
@@ -374,9 +384,10 @@ async function doLaunch() {
       try { const p = pad.interface.parseLog(log); if (p && p.name === "TokenCreated") { newTok = p.args.token; break; } } catch (e) {}
     }
     const img = $("lImg").value.trim(), tg = $("lTg").value.trim(), xx = $("lX").value.trim(), web = $("lWeb").value.trim();
-    if (newTok && (img || tg || xx || web)) {
+    if (newTok && (img || tg || xx || web || pickedImage.l)) {
       st.textContent = "sign to attach your token info (free, no gas)…";
-      await submitMeta(newTok, { image: img, telegram: tg, x: xx, website: web });
+      await submitMeta(newTok, { image: img, telegram: tg, x: xx, website: web, imageData: pickedImage.l });
+      pickedImage.l = null;
     }
     st.className = "status ok"; st.textContent = "✅ launched!";
     closeModals(); toast(`$${tick} is live 🏹`);
@@ -456,6 +467,36 @@ async function doSell() {
   } catch (e) { st.className = "status err"; st.textContent = e.shortMessage || e.message; }
 }
 
+let pickedImage = { l: null, e: null };
+
+function pickImage(input, which) {
+  const f = input.files && input.files[0];
+  if (f) handleImageFile(f, which);
+}
+function handleImageFile(f, which) {
+  if (!/^image\/(png|jpeg|webp|gif)$/.test(f.type)) { toast("png / jpg / webp / gif only"); return; }
+  if (f.size > 2 * 1024 * 1024) { toast("image over 2MB — pick a smaller one"); return; }
+  const r = new FileReader();
+  r.onload = () => {
+    pickedImage[which] = r.result;
+    const img = $(which + "Preview"), txt = $(which + "DropTxt");
+    if (img) { img.src = r.result; img.style.display = "block"; }
+    if (txt) txt.textContent = f.name;
+  };
+  r.readAsDataURL(f);
+}
+function wireDrop(id, which) {
+  const el = $(id); if (!el) return;
+  el.addEventListener("dragover", (e) => { e.preventDefault(); el.classList.add("over"); });
+  el.addEventListener("dragleave", () => el.classList.remove("over"));
+  el.addEventListener("drop", (e) => {
+    e.preventDefault(); el.classList.remove("over");
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) handleImageFile(f, which);
+  });
+}
+wireDrop("lDrop", "l");
+
 async function submitMeta(token, m) {
   const sig = await signer.signMessage("hoodpad-meta:" + token.toLowerCase());
   const r = await fetch("/meta", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -469,22 +510,35 @@ function openEditMeta() {
     <button class="closeX" onclick="closeModals()">✕</button>
     <div class="mTitle">Edit info · $${t.symbol}</div>
     <div class="mSub">${t.addr}</div>
-    <div class="field"><label>Logo image link</label><input id="eImg" value="${m.image || ""}" placeholder="https://i.imgur.com/..."></div>
+    <div class="field"><label>Logo (drag an image here or click)</label>
+      <div class="drop" id="eDrop" onclick="document.getElementById('eFile').click()">
+        <span id="eDropTxt">drop image / click to choose</span>
+        <img id="ePreview" style="display:none" ${m.image ? `src="${m.image}" style="display:block"` : ""}>
+      </div>
+      <input type="file" id="eFile" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none" onchange="pickImage(this, 'e')">
+    </div>
+    <div class="field"><label>…or logo image link</label><input id="eImg" value="${m.image && !m.image.startsWith("/img/") ? m.image : ""}" placeholder="https://i.imgur.com/..."></div>
     <div class="field"><label>Telegram</label><input id="eTg" value="${m.telegram || ""}" placeholder="https://t.me/..."></div>
     <div class="field"><label>X / Twitter</label><input id="eX" value="${m.x || ""}" placeholder="https://x.com/..."></div>
     <div class="field"><label>Website</label><input id="eWeb" value="${m.website || ""}" placeholder="https://..."></div>
     <button class="btn" style="width:100%;padding:13px" onclick="doEditMeta()">Save (free, sign only)</button>
     <div class="status" id="eStatus"></div>`;
+  wireDrop("eDrop", "e");
 }
 
 async function doEditMeta() {
   if (!(await needWallet())) return;
   const st = $("eStatus"); st.className = "status"; st.textContent = "sign in wallet…";
   try {
+    const m = currentToken.meta;
+    let image = $("eImg").value.trim();
+    if (!image && !pickedImage.e && m.image && m.image.startsWith("/img/")) image = m.image; // keep hosted logo
     await submitMeta(currentToken.addr, {
-      image: $("eImg").value.trim(), telegram: $("eTg").value.trim(),
+      image, telegram: $("eTg").value.trim(),
       x: $("eX").value.trim(), website: $("eWeb").value.trim(),
+      imageData: pickedImage.e,
     });
+    pickedImage.e = null;
     st.className = "status ok"; st.textContent = "✅ saved";
     await loadTokens(); openTrade(currentToken.addr);
   } catch (e) { st.className = "status err"; st.textContent = e.message; }
