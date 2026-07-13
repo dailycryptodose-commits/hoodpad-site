@@ -448,7 +448,6 @@ async function renderTokenPage(soft) {
             <div><span class="lbl">holders</span><span class="val" id="tpHolders">…</span></div>
             <div><span class="lbl">creator earned</span><span class="val" style="color:var(--green)">${(t.creatorFees || 0).toFixed(4)} ETH</span></div>
           </div>
-          <div class="trades" id="tpTop"></div>
           <div class="trades" id="tpTrades"></div>
         </div>
         <div class="panel" id="tpPanel"></div>
@@ -500,8 +499,10 @@ async function fillTradePanel(t) {
            <button class="btn" onclick="doBuy()">Buy</button>
            <button class="btn sellBtn" onclick="doSell()">Sell</button>
          </div>`}
-    <div class="status" id="tStatus"></div>`;
+    <div class="status" id="tStatus"></div>
+    <div class="trades" id="tpTop"></div>`;
   window._sellBal = bal;
+  if (currentToken) loadHolders(currentToken);
 }
 
 let curveParams = null;
