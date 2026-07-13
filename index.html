@@ -122,6 +122,7 @@
   .gradFill::after{content:"";position:absolute;top:0;bottom:0;width:46%;left:-50%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.34),transparent);animation:sweep 2.6s ease-in-out infinite}
   @keyframes sweep{0%{left:-50%}60%,100%{left:110%}}
   @keyframes breathe{0%,100%{box-shadow:0 0 6px rgba(95,190,18,.35)}50%{box-shadow:0 0 18px rgba(95,190,18,.75)}}
+  @keyframes popIn{from{transform:scale(.7);opacity:0}to{transform:scale(1);opacity:1}}
   .gradTxt{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:'JetBrains Mono';font-size:12px;font-weight:700;color:var(--txt);text-shadow:0 1px 4px rgba(0,0,0,.45)}
   .note{font-size:12px;color:var(--faint);margin-top:12px;line-height:1.5}
   .closeX{float:right;background:none;border:none;color:var(--faint);font-size:20px}
@@ -420,6 +421,7 @@ async function init() {
   } else {
     loadFeed();
     setInterval(loadTokens, 20000);
+    watchNewTokens();
   }
   setInterval(ethPrice, 60000);
 }
@@ -742,7 +744,9 @@ async function loadTokens() {
   // fast path: server-built cache, one fetch
   try {
     const c = await (await fetch("/tokens")).json();
-    if (c && c.ts && c.tokens) {
+    let chainCount = null;
+    try { chainCount = Number(await pad.tokenCount()); } catch (e) {}
+    if (c && c.ts && c.tokens && (chainCount === null || c.tokens.length >= chainCount)) {
       tokens = c.tokens.map((t) => {
         const priceEth = Number(E.formatEther(BigInt(t.price)));
         return { addr: t.addr, i: t.i, name: t.name, symbol: t.symbol, migrated: t.migrated,
@@ -865,6 +869,26 @@ function render() {
         </div>
       </div>`;
   } else h.style.display = "none";
+}
+
+let lastSeenBlock = 0;
+async function watchNewTokens() {
+  try { lastSeenBlock = await reader.getBlockNumber(); } catch (e) {}
+  setInterval(async () => {
+    try {
+      const latest = await reader.getBlockNumber();
+      if (latest <= lastSeenBlock) return;
+      const evs = await pad.queryFilter(pad.filters.TokenCreated(), lastSeenBlock + 1, latest);
+      lastSeenBlock = latest;
+      if (!evs.length) return;
+      for (const e of evs) {
+        toast(`🏹 $${e.args.symbol} just launched!`);
+      }
+      await loadTokens(); // pull fresh list (cache may lag a beat; rpc fallback covers it)
+      const first = $("grid").firstElementChild;
+      if (first) { first.style.animation = "popIn .5s cubic-bezier(.2,.9,.3,1.4)"; }
+    } catch (e) {}
+  }, 4000);
 }
 
 async function loadFeed() {
