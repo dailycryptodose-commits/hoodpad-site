@@ -139,6 +139,7 @@
   <a href="/" class="logo" style="display:flex;align-items:center;gap:9px;text-decoration:none;color:inherit"><img src="/logo.png" width="28" height="28" alt="" style="border-radius:8px">HOOD<em>PAD</em></a>
   <input id="searchBar" class="search" placeholder="search name, ticker, or paste CA…" oninput="doSearch(this.value)" onkeydown="if(event.key==='Enter')searchGo(this.value)">
   <div class="navBtns">
+    <a href="/analytics" class="btn ghost" style="text-decoration:none">📊</a>
     <button class="btn ghost" id="connectBtn" onclick="connect()">Connect wallet</button>
     <button class="btn" onclick="openLaunch()">+ Launch a token</button>
   </div>
@@ -168,6 +169,8 @@
 </div>
 
 <div class="tpage" id="tokenView"></div>
+
+<div class="tpage" id="statsView"></div>
 
 <!-- launch modal -->
 <div class="modalBg" id="launchModal">
@@ -255,6 +258,49 @@ async function ethPrice() {
 
 const pagePath = location.pathname.match(/^\/t\/(0x[0-9a-fA-F]{40})$/);
 const pageToken = pagePath ? pagePath[1] : null;
+const statsPage = location.pathname === "/analytics";
+
+async function renderStats() {
+  document.getElementById("homeView").style.display = "none";
+  document.querySelector(".feed").style.display = "none";
+  const s = await (await fetch("/stats")).json();
+  const volEth = Number(E.formatEther(BigInt(s.vol)));
+  const feeEth = Number(E.formatEther(BigInt(s.fees)));
+  const days = Object.keys(s.daily).sort().slice(-14);
+  const dVals = days.map((d) => Number(E.formatEther(BigInt(s.daily[d]))));
+  const maxD = Math.max(...dVals, 0.0001);
+  const W = 600, H = 160, bw = W / Math.max(days.length, 1);
+  const bars = days.map((d, i) => {
+    const h = (dVals[i] / maxD) * (H - 30);
+    return `<rect x="${i * bw + 3}" y="${H - 20 - h}" width="${bw - 6}" height="${Math.max(h, 1)}" rx="4" fill="#38E07B"/>
+      <text x="${i * bw + bw / 2}" y="${H - 6}" text-anchor="middle" font-size="8" fill="#69806F" font-family="JetBrains Mono">${d.slice(5)}</text>`;
+  }).join("");
+  const top = Object.entries(s.perToken).map(([a, v]) => ({ a, vol: Number(E.formatEther(BigInt(v.vol))), trades: v.trades }))
+    .sort((x, y) => y.vol - x.vol).slice(0, 10);
+  const nameOf = (a) => { const t = tokens.find((x) => x.addr.toLowerCase() === a); return t ? `${t.name} ($${t.symbol})` : short(a); };
+  const card = (lbl, val) => `<div class="panel" style="text-align:center"><div style="font-size:11px;color:var(--faint);margin-bottom:6px">${lbl}</div><div style="font-family:'JetBrains Mono';font-weight:700;font-size:20px">${val}</div></div>`;
+  $("statsView").style.display = "block";
+  $("statsView").innerHTML = `
+    <a class="back" href="/">← all tokens</a>
+    <div class="tpName" style="margin-bottom:16px">Analytics</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px">
+      ${card("tokens launched", s.launches)}
+      ${card("migrations", s.migrations)}
+      ${card("total volume", volEth.toFixed(3) + " ETH")}
+      ${card("volume (usd)", fmtUsd(volEth * ethUsd))}
+      ${card("trades", s.buys + s.sells)}
+      ${card("unique traders", s.traders)}
+      ${card("platform fees earned", feeEth.toFixed(4) + " ETH")}
+    </div>
+    <div class="panel" style="margin-bottom:14px">
+      <div style="font-size:12px;color:var(--faint);margin-bottom:8px">daily volume (ETH, last 14 days)</div>
+      <svg viewBox="0 0 ${W} ${H}" style="width:100%">${bars}</svg>
+    </div>
+    <div class="panel">
+      <div style="font-size:12px;color:var(--faint);margin-bottom:4px">top tokens by volume</div>
+      ${top.length ? top.map((t, i) => `<div class="trade"><span>#${i + 1} <a href="/t/${t.a}" style="color:var(--mint);text-decoration:none">${nameOf(t.a)}</a></span><span>${t.trades} trades</span><span>${t.vol.toFixed(3)} ETH</span></div>`).join("") : `<div style="color:var(--faint);font-size:13px;padding:12px 0">no trades yet</div>`}
+    </div>`;
+}
 
 async function init() {
   const cfg = await (await fetch("/config")).json();
@@ -269,6 +315,9 @@ async function init() {
     document.querySelector(".feed").style.display = "none";
     renderTokenPage();
     setInterval(async () => { await loadTokens(); renderTokenPage(true); }, 20000);
+  } else if (statsPage) {
+    renderStats();
+    setInterval(renderStats, 30000);
   } else {
     loadFeed();
     setInterval(loadTokens, 20000);

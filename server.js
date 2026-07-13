@@ -126,3 +126,78 @@ app.get("/prices/:token", (req, res) => {
 
 // token pages — same app, client-side routing
 app.get("/t/:token", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+
+// ---- analytics indexer ----
+const STATS_FILE = path.join(DATA_DIR, "stats.json");
+let stats = { lastBlock: 0, vol: "0", fees: "0", buys: 0, sells: 0, launches: 0, migrations: 0, traders: {}, daily: {}, perToken: {} };
+try { stats = Object.assign(stats, JSON.parse(fs.readFileSync(STATS_FILE, "utf8"))); } catch (e) {}
+
+const padIface = new ethers.Interface([
+  "event TokenCreated(address indexed token, address indexed creator, string name, string symbol)",
+  "event Buy(address indexed token, address indexed buyer, uint ethIn, uint tokensOut)",
+  "event Sell(address indexed token, address indexed seller, uint tokensIn, uint ethOut, uint taxEth)",
+  "event Migrated(address indexed token, uint ethToLp, uint tokensToLp)"
+]);
+
+function addWei(a, b) { return (BigInt(a) + b).toString(); }
+function bump(tok, wei) {
+  const k = tok.toLowerCase();
+  if (!stats.perToken[k]) stats.perToken[k] = { vol: "0", trades: 0 };
+  stats.perToken[k].vol = addWei(stats.perToken[k].vol, wei);
+  stats.perToken[k].trades++;
+}
+
+async function indexStats() {
+  if (!PAD) return;
+  try {
+    const latest = await provider.getBlockNumber();
+    let from = stats.lastBlock ? stats.lastBlock + 1 : Math.max(0, latest - 200000);
+    if (from > latest) return;
+    const day = new Date().toISOString().slice(0, 10);
+    while (from <= latest) {
+      const to = Math.min(from + 9999, latest);
+      const logs = await provider.getLogs({ address: PAD, fromBlock: from, toBlock: to });
+      for (const log of logs) {
+        let p; try { p = padIface.parseLog(log); } catch (e) { continue; }
+        if (!p) continue;
+        if (p.name === "TokenCreated") stats.launches++;
+        if (p.name === "Migrated") stats.migrations++;
+        if (p.name === "Buy") {
+          stats.buys++;
+          stats.vol = addWei(stats.vol, p.args.ethIn);
+          stats.fees = addWei(stats.fees, p.args.ethIn / 100n);
+          stats.daily[day] = addWei(stats.daily[day] || "0", p.args.ethIn);
+          if (Object.keys(stats.traders).length < 100000) stats.traders[p.args.buyer.toLowerCase()] = 1;
+          bump(p.args.token, p.args.ethIn);
+        }
+        if (p.name === "Sell") {
+          stats.sells++;
+          stats.vol = addWei(stats.vol, p.args.ethOut);
+          stats.fees = addWei(stats.fees, p.args.taxEth);
+          stats.daily[day] = addWei(stats.daily[day] || "0", p.args.ethOut);
+          if (Object.keys(stats.traders).length < 100000) stats.traders[p.args.seller.toLowerCase()] = 1;
+          bump(p.args.token, p.args.ethOut);
+        }
+      }
+      from = to + 1;
+    }
+    stats.lastBlock = latest;
+    // keep only last 30 daily buckets
+    const days = Object.keys(stats.daily).sort();
+    while (days.length > 30) delete stats.daily[days.shift()];
+    fs.writeFileSync(STATS_FILE, JSON.stringify(stats));
+  } catch (e) {}
+}
+setInterval(indexStats, 60_000);
+indexStats();
+
+app.get("/stats", (req, res) => {
+  res.json({
+    vol: stats.vol, fees: stats.fees, buys: stats.buys, sells: stats.sells,
+    launches: stats.launches, migrations: stats.migrations,
+    traders: Object.keys(stats.traders).length,
+    daily: stats.daily, perToken: stats.perToken,
+  });
+});
+
+app.get("/analytics", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
