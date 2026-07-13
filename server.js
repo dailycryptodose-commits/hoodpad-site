@@ -82,6 +82,9 @@ app.get("/img/:file", (req, res) => {
 });
 
 app.get("/logo.png", (req, res) => { res.setHeader("Cache-Control", "public, max-age=86400"); res.sendFile(path.join(__dirname, "logo.png")); });
+for (const f of ["logo-wide.png", "logo-dark.png", "logo-light.png"]) {
+  app.get("/" + f, (req, res) => { res.setHeader("Cache-Control", "public, max-age=86400"); res.sendFile(path.join(__dirname, f)); });
+}
 app.get("/", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
 
 const port = process.env.PORT || 3000;
