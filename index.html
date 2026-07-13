@@ -162,6 +162,9 @@
   @media(max-width:640px){.searchM{display:block}.searchM .search{display:block;max-width:none;width:100%;margin:0}}
   .explorer{font-family:'JetBrains Mono';font-size:11.5px;color:var(--dim);text-decoration:none}
   .explorer:hover{color:var(--mint)}
+  .slideRow{display:flex;align-items:center;gap:12px;margin:-4px 0 14px}
+  .slideRow input[type=range]{flex:1;accent-color:var(--green);height:22px;cursor:pointer}
+  .slidePct{font-family:'JetBrains Mono';font-size:12px;font-weight:700;color:var(--green);min-width:44px;text-align:right}
   .chips{display:flex;gap:6px;margin:-6px 0 12px}
   .chip{background:#0C1107;border:1px solid var(--line2);color:var(--dim);font-family:'JetBrains Mono';font-size:11px;padding:6px 10px;border-radius:9px}
   .chip:hover{border-color:#3E5C22;color:var(--mint)}
@@ -469,30 +472,23 @@ async function renderTokenPage(soft) {
 }
 
 async function fillTradePanel(t) {
-  let bal = null;
+  let bal = null, ethBal = null;
   if (wallet) {
     try { bal = await new E.Contract(t.addr, TOK_ABI, reader).balanceOf(wallet); } catch (e) {}
+    try { ethBal = await reader.getBalance(wallet); } catch (e) {}
   }
+  window._ethBal = ethBal;
   const balTxt = bal !== null ? Number(E.formatEther(bal)).toLocaleString(undefined, { maximumFractionDigits: 0 }) : null;
   $("tpPanel").innerHTML = `
     ${wallet && wallet.toLowerCase() === t.creator.toLowerCase() ? `<div style="margin-bottom:14px"><button class="btn ghost" style="font-size:12px;padding:7px 12px" onclick="openEditMetaPage()">edit token info</button></div>` : ""}
     ${t.migrated
       ? `<div class="note">this token has migrated — trade it on the DEX.</div>`
       : `<div class="field"><label>Buy (ETH)</label><input id="buyAmt" placeholder="0.01" inputmode="decimal" oninput="quoteB()"></div>
-         <div class="chips">
-           <button class="chip" onclick="setBuy(0.01)">0.01</button>
-           <button class="chip" onclick="setBuy(0.05)">0.05</button>
-           <button class="chip" onclick="setBuy(0.1)">0.1</button>
-           <button class="chip" onclick="setBuy(0.5)">0.5</button>
-         </div>
+         <div class="slideRow"><input type="range" min="0" max="100" value="0" id="buySlide" oninput="slideBuy(this.value)" ${ethBal === null ? "disabled" : ""}><span class="slidePct" id="buySlidePct">0%</span></div>
          <div class="quote" id="buyQuote"></div>
          <div class="field"><label>Sell (${t.symbol})${balTxt !== null ? ` — you hold ${balTxt}` : ""}</label><input id="sellAmt" placeholder="0" inputmode="decimal" oninput="quoteS()"></div>
-         ${bal !== null && bal > 0n ? `<div class="chips">
-           <button class="chip" onclick="setSellPct(25)">25%</button>
-           <button class="chip" onclick="setSellPct(50)">50%</button>
-           <button class="chip" onclick="setSellPct(75)">75%</button>
-           <button class="chip" onclick="setSellPct(100)">100%</button>
-         </div>` : wallet ? "" : `<div class="quote">connect wallet to see your balance</div>`}
+         <div class="slideRow"><input type="range" min="0" max="100" value="0" id="sellSlide" oninput="slideSell(this.value)" ${bal !== null && bal > 0n ? "" : "disabled"}><span class="slidePct" id="sellSlidePct">0%</span></div>
+         ${wallet ? "" : `<div class="quote">connect wallet to use the sliders</div>`}
          <div class="quote" id="sellQuote"></div>
          <div class="row2">
            <button class="btn" onclick="doBuy()">Buy</button>
@@ -520,6 +516,20 @@ async function quoteLaunchBuy() {
     const pct = (out / 1_000_000_000) * 100;
     q.textContent = "you'll snipe ≈ " + Math.floor(out).toLocaleString() + " tokens (" + pct.toFixed(1) + "% of supply)";
   } catch (e) { q.textContent = ""; }
+}
+
+function slideBuy(p) {
+  $("buySlidePct").textContent = p + "%";
+  if (window._ethBal === null || window._ethBal === undefined) return;
+  const reserve = E.parseEther("0.001"); // keep gas
+  const usable = window._ethBal > reserve ? window._ethBal - reserve : 0n;
+  const amt = (usable * BigInt(p)) / 100n;
+  $("buyAmt").value = (+E.formatEther(amt)).toFixed(5);
+  quoteB();
+}
+function slideSell(p) {
+  $("sellSlidePct").textContent = p + "%";
+  setSellPct(Number(p));
 }
 
 function setBuy(v) { $("buyAmt").value = v; quoteB(); }
