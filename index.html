@@ -116,6 +116,7 @@
   .row2 .btn{flex:1;padding:13px}
   .btn.sellBtn{background:#241214;color:#FFB0B0;box-shadow:none;border:1px solid #3A1D20}
   .quote{font-family:'JetBrains Mono';font-size:12px;color:var(--dim);margin:-6px 0 14px;min-height:16px}
+  .quickLbl{font-size:10.5px;color:var(--faint);letter-spacing:1px;text-transform:uppercase;margin:-4px 0 6px}
   .note{font-size:12px;color:var(--faint);margin-top:12px;line-height:1.5}
   .closeX{float:right;background:none;border:none;color:var(--faint);font-size:20px}
   .status{font-family:'JetBrains Mono';font-size:12px;margin-top:12px;min-height:16px;word-break:break-all}
@@ -486,9 +487,25 @@ async function fillTradePanel(t) {
       ? `<div class="note">this token has migrated — trade it on the DEX.</div>`
       : `<div class="field"><label>Buy (ETH)</label><input id="buyAmt" placeholder="0.01" inputmode="decimal" oninput="quoteB()"></div>
          <div class="slideRow"><input type="range" min="0" max="100" value="0" id="buySlide" oninput="slideBuy(this.value)" ${ethBal === null ? "disabled" : ""}><span class="slidePct" id="buySlidePct">0%</span><span class="slideUsd" id="buyUsd"></span></div>
+         <div class="quickLbl">quick buy</div>
+         <div class="chips">
+           <button class="chip" onclick="setBuy(0.01)">0.01</button>
+           <button class="chip" onclick="setBuy(0.05)">0.05</button>
+           <button class="chip" onclick="setBuy(0.1)">0.1</button>
+           <button class="chip" onclick="setBuy(0.25)">0.25</button>
+           <button class="chip" onclick="setBuy(0.5)">0.5</button>
+           <button class="chip" onclick="setBuy(1)">1</button>
+         </div>
          <div class="quote" id="buyQuote"></div>
          <div class="field"><label>Sell (${t.symbol})${balTxt !== null ? ` — you hold ${balTxt}` : ""}</label><input id="sellAmt" placeholder="0" inputmode="decimal" oninput="quoteS()"></div>
          <div class="slideRow"><input type="range" min="0" max="100" value="0" id="sellSlide" oninput="slideSell(this.value)" ${bal !== null && bal > 0n ? "" : "disabled"}><span class="slidePct" id="sellSlidePct">0%</span><span class="slideUsd" id="sellUsd"></span></div>
+         ${bal !== null && bal > 0n ? `<div class="quickLbl">quick sell</div>
+         <div class="chips">
+           <button class="chip" onclick="slideSyncSell(25)">25%</button>
+           <button class="chip" onclick="slideSyncSell(50)">50%</button>
+           <button class="chip" onclick="slideSyncSell(75)">75%</button>
+           <button class="chip" onclick="slideSyncSell(100)">100%</button>
+         </div>` : ""}
          ${wallet ? "" : `<div class="quote">connect wallet to use the sliders</div>`}
          <div class="quote" id="sellQuote"></div>
          <div class="row2">
@@ -528,6 +545,11 @@ function slideBuy(p) {
   $("buyAmt").value = (+E.formatEther(amt)).toFixed(5);
   const u = $("buyUsd"); if (u) u.textContent = ethUsd ? "$" + (Number(E.formatEther(amt)) * ethUsd).toFixed(2) : "";
   quoteB();
+}
+function slideSyncSell(p) {
+  const s = $("sellSlide"); if (s) s.value = p;
+  const l = $("sellSlidePct"); if (l) l.textContent = p + "%";
+  setSellPct(p);
 }
 function slideSell(p) {
   $("sellSlidePct").textContent = p + "%";
