@@ -426,6 +426,7 @@ async function renderTokenPage(soft) {
             <div><span class="lbl">bonded</span><span class="val" id="tpBonded"></span></div>
             <div><span class="lbl">created</span><span class="val">${fmtAge(t.created)}</span></div>
             <div><span class="lbl">holders</span><span class="val" id="tpHolders">…</span></div>
+            <div><span class="lbl">creator earned</span><span class="val" style="color:var(--green)">${(t.creatorFees || 0).toFixed(4)} ETH</span></div>
           </div>
           <div class="trades" id="tpTop"></div>
           <div class="trades" id="tpTrades"></div>
@@ -578,7 +579,8 @@ async function loadTokens() {
         return { addr: t.addr, i: t.i, name: t.name, symbol: t.symbol, migrated: t.migrated,
                  realEth: Number(E.formatEther(BigInt(t.realEth))), priceEth,
                  mcapUsd: priceEth * 1e9 * ethUsd, prog: t.prog / 100,
-                 creator: t.creator, meta: t.meta || {}, created: t.created, trades: t.trades };
+                 creator: t.creator, meta: t.meta || {}, created: t.created, trades: t.trades,
+                 creatorFees: t.creatorFees ? Number(E.formatEther(BigInt(t.creatorFees))) : 0 };
       });
       render();
       return;
