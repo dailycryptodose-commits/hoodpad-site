@@ -118,7 +118,10 @@
   .quote{font-family:'JetBrains Mono';font-size:12px;color:var(--dim);margin:-6px 0 14px;min-height:16px}
   .quickLbl{font-size:10.5px;color:var(--faint);letter-spacing:1px;text-transform:uppercase;margin:-4px 0 6px}
   .gradBar{position:relative;height:30px;background:var(--panel);border:1px solid var(--line2);border-radius:99px;overflow:hidden;margin:2px 0 18px}
-  .gradFill{position:absolute;inset:0;width:0%;background:linear-gradient(90deg,#3B7F0C,#5FBE12,#CBEF8F);border-radius:99px;transition:width 1.2s cubic-bezier(.2,.8,.2,1)}
+  .gradFill{position:absolute;inset:0;width:0%;background:linear-gradient(90deg,#3B7F0C,#5FBE12,#CBEF8F);border-radius:99px;transition:width 1.2s cubic-bezier(.2,.8,.2,1);overflow:hidden;animation:breathe 3.2s ease-in-out infinite}
+  .gradFill::after{content:"";position:absolute;top:0;bottom:0;width:46%;left:-50%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.34),transparent);animation:sweep 2.6s ease-in-out infinite}
+  @keyframes sweep{0%{left:-50%}60%,100%{left:110%}}
+  @keyframes breathe{0%,100%{box-shadow:0 0 6px rgba(95,190,18,.35)}50%{box-shadow:0 0 18px rgba(95,190,18,.75)}}
   .gradTxt{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:'JetBrains Mono';font-size:12px;font-weight:700;color:var(--txt);text-shadow:0 1px 4px rgba(0,0,0,.45)}
   .note{font-size:12px;color:var(--faint);margin-top:12px;line-height:1.5}
   .closeX{float:right;background:none;border:none;color:var(--faint);font-size:20px}
