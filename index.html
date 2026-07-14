@@ -10,7 +10,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.2/ethers.umd.min.js"></script>
 <style>
   *{box-sizing:border-box;margin:0}
-  :root{--bg:#0A0D06;--panel:#10150A;--line:#1B2411;--line2:#223014;--txt:#EFF5E6;--dim:#96A583;--faint:#6F7F5C;--green:#5FBE12;--mint:#CBEF8F;--red:#FF6B6B;--amber:#FFB25C;--lime:#D8E05C}
+  :root{--bg:#0A0C08;--panel:#12150E;--line:#1D2314;--line2:#242D18;--txt:#EFF5E6;--dim:#96A583;--faint:#6F7F5C;--green:#5FBE12;--mint:#CBEF8F;--red:#FF6B6B;--amber:#FFB25C;--lime:#D8E05C}
   body{min-height:100vh;background:linear-gradient(180deg,#0A0D06 0%,#111C07 100%) fixed;color:var(--txt);font-family:'Sora',sans-serif;padding-bottom:80px;overflow-x:hidden}
   body[data-theme="light"]{
     --bg:#F8FBEF;--panel:#FFFFFF;--line:#E1ECC9;--line2:#CFE2A9;--txt:#1B2408;--dim:#4E6132;--faint:#83926A;--green:#4E9E0C;--mint:#3A770A;
@@ -138,6 +138,16 @@
   .drop img{width:48px;height:48px;border-radius:12px;object-fit:cover}
   .tpage{max-width:none;margin:0 auto;padding:24px 2.5vw;display:none}
   .tpHead{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:6px}
+  .tpHeadCard{display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap;margin-bottom:16px;padding:20px 22px}
+  .caChip{display:inline-flex;align-items:center;gap:8px;background:var(--bg);border:1px solid var(--line2);border-radius:10px;padding:7px 12px;font-family:'JetBrains Mono';font-size:12px;color:var(--dim);cursor:pointer;margin:10px 0 6px}
+  .caChip:hover{color:var(--mint)}
+  .metaRow{font-family:'JetBrains Mono';font-size:11.5px;color:var(--faint)}
+  .metaRow b{color:var(--green);font-weight:700}
+  .mcapBig{text-align:right}
+  .mcapBig .lbl{font-size:10.5px;letter-spacing:2px;color:var(--faint);text-transform:uppercase}
+  .mcapBig .val{font-family:'JetBrains Mono';font-weight:700;font-size:30px;color:var(--green)}
+  .rightCol{display:flex;flex-direction:column;gap:14px}
+  .secLbl{font-size:10.5px;letter-spacing:2px;color:var(--faint);text-transform:uppercase;margin-bottom:10px}
   .tpName{font-family:'Unbounded';font-weight:700;font-size:26px}
   .tpAddr{font-family:'JetBrains Mono';font-size:11.5px;color:var(--faint);word-break:break-all;margin-bottom:14px;cursor:pointer}
   .back{font-family:'JetBrains Mono';font-size:12px;color:var(--dim);text-decoration:none;display:inline-block;margin-bottom:18px}
@@ -146,7 +156,7 @@
   @media(min-width:1000px){
     .tpGrid{grid-template-columns:195px minmax(0,1fr) 400px;gap:16px;grid-template-areas:"rail chart trade"}
     .chartPanel{grid-area:chart}
-    #tpPanel{grid-area:trade;align-self:start}
+    .rightCol{align-self:start}
     .statRail{grid-area:rail;align-self:start}
   }
   .statRail{display:flex;flex-direction:column;gap:10px}
@@ -275,6 +285,7 @@ const PAD_ABI = [
   "function quoteSell(address, uint) view returns (uint)",
   "function creationFee() view returns (uint)",
   "function virtualEth() view returns (uint)",
+  "function migrationEth() view returns (uint)",
   "function buyFeeBps() view returns (uint16)",
   "function migrationEth() view returns (uint)",
   "function createToken(string, string, bytes32) payable returns (address)",
@@ -294,7 +305,7 @@ const TOK_ABI = [
 ];
 const SUPPLY = E.parseEther("1000000000");
 
-let PAD_ADDR = null, reader = null, pad = null;
+let PAD_ADDR = null, reader = null, pad = null, MIGRATION_ETH = 3;
 let signer = null, wallet = null;
 let tokens = [], tab = "trending", ethUsd = 0, currentToken = null, metaMap = {};
 
@@ -473,6 +484,7 @@ async function init() {
   reconnectSilently();
   connectLive();
   try { $("feeShow").textContent = E.formatEther(await pad.creationFee()); } catch (e) {}
+  try { MIGRATION_ETH = Number(E.formatEther(await pad.migrationEth())); } catch (e) {}
   await loadTokens();
   if (pageToken) {
     document.getElementById("homeView").style.display = "none";
@@ -502,13 +514,19 @@ async function renderTokenPage(soft) {
   if (!soft) {
     view.innerHTML = `
       <a class="back" href="/">← all tokens</a>
-      <div class="tpHead">${avatarHtml(t, 52)}<div>
-        <div class="tpName">${t.name} <span style="color:var(--faint);font-size:14px">$${t.symbol}</span></div>
-        ${socialsHtml(t)}
+      <div class="panel tpHeadCard">
+        <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+          ${avatarHtml(t, 60)}
+          <div>
+            <div class="tpName" style="display:flex;align-items:center;gap:10px">${t.name} <span style="color:var(--faint);font-size:14px">$${t.symbol}</span>
+              <span class="taxBadge ${t.migrated ? "low" : "mid"}" style="font-size:10px">${t.migrated ? "GRADUATED" : "BONDING"}</span></div>
+            <div class="caChip" onclick="navigator.clipboard.writeText('${t.addr}');toast('address copied')">CA ${short(t.addr)} ⧉ <a class="explorer" href="${EXPLORER}/address/${t.addr}" target="_blank" rel="noopener" onclick="event.stopPropagation()">↗</a></div>
+            <div class="metaRow">created by <a href="${EXPLORER}/address/${t.creator}" target="_blank" rel="noopener" style="color:var(--dim);text-decoration:none">${short(t.creator)}</a> · created ${fmtAge(t.created)} · creator earned <b>${(t.creatorFees || 0).toFixed(4)} ETH</b></div>
+            ${socialsHtml(t)}
+          </div>
+        </div>
+        <div class="mcapBig"><div class="lbl">market cap</div><div class="val" id="tpMcapBig">${fmtUsd(t.mcapUsd)}</div></div>
       </div>
-      <div class="taxBadge low" style="margin-left:auto">${t.migrated ? "migrated" : t.prog.toFixed(1) + "% bonded"}</div></div>
-      <div class="tpAddr"><span onclick="navigator.clipboard.writeText('${t.addr}');toast('address copied')">${t.addr} ⧉</span> · <a class="explorer" href="${EXPLORER}/address/${t.addr}" target="_blank" rel="noopener">view on explorer ↗</a></div>
-      <div class="gradBar"><div class="gradFill" id="gradFill" style="width:${t.migrated ? 100 : Math.min(100, t.prog)}%"></div><span class="gradTxt" id="gradTxt">${t.migrated ? "🎓 graduated — trading on uniswap" : "🎓 " + t.prog.toFixed(1) + "% to graduation · migrates to uniswap at 100%"}</span></div>
       <div class="tpGrid">
         <div class="statRail">
           <div class="statBox"><span class="lbl">24h volume</span><span class="val" id="stVol">…</span></div>
@@ -532,7 +550,18 @@ async function renderTokenPage(soft) {
           </div>
           <div class="trades" id="tpTrades"></div>
         </div>
-        <div class="panel" id="tpPanel"></div>
+        <div class="rightCol" style="grid-area:trade">
+          <div class="panel" id="tpPanel"></div>
+          <div class="panel">
+            <div class="secLbl">🎓 graduation</div>
+            <div class="gradBar" style="margin:0 0 8px"><div class="gradFill" id="gradFill" style="width:${t.migrated ? 100 : Math.min(100, t.prog)}%"></div></div>
+            <div class="metaRow" id="gradTxt" style="display:flex;justify-content:space-between"><span>${t.migrated ? "graduated — trading on uniswap" : t.realEth.toFixed(3) + " / " + MIGRATION_ETH + " ETH raised"}</span><b>${t.migrated ? "100%" : t.prog.toFixed(1) + "%"}</b></div>
+          </div>
+          <div class="panel">
+            <div class="secLbl">👑 top holders</div>
+            <div class="trades" id="tpTop" style="margin:0"></div>
+          </div>
+        </div>
       </div>`;
     fillTradePanel(t);
     drawChart(t);
@@ -547,7 +576,8 @@ async function renderTokenPage(soft) {
     loadHolders(t);
     const gf = $("gradFill"), gt = $("gradTxt");
     if (gf) gf.style.width = (t.migrated ? 100 : Math.min(100, t.prog)) + "%";
-    if (gt) gt.textContent = t.migrated ? "🎓 graduated — trading on uniswap" : "🎓 " + t.prog.toFixed(1) + "% to graduation · migrates to uniswap at 100%";
+    if (gt) gt.innerHTML = t.migrated ? `<span>graduated — trading on uniswap</span><b>100%</b>` : `<span>${t.realEth.toFixed(3)} / ${MIGRATION_ETH} ETH raised</span><b>${t.prog.toFixed(1)}%</b>`;
+    const mb = $("tpMcapBig"); if (mb) mb.textContent = fmtUsd(t.mcapUsd);
   }
   $("tpMcap").textContent = fmtUsd(t.mcapUsd);
   $("tpRaised").textContent = t.realEth.toFixed(3) + " ETH";
@@ -592,8 +622,7 @@ async function fillTradePanel(t) {
            <button class="btn" onclick="doBuy()">Buy</button>
            <button class="btn sellBtn" onclick="doSell()">Sell</button>
          </div>`}
-    <div class="status" id="tStatus"></div>
-    <div class="trades" id="tpTop"></div>`;
+    <div class="status" id="tStatus"></div>`;
   window._sellBal = bal;
   if (currentToken) loadHolders(currentToken);
 }
