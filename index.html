@@ -363,24 +363,36 @@ async function renderStats() {
   document.querySelector(".feed").style.display = "none";
   const s = await (await fetch("/stats")).json();
   const volEth = Number(E.formatEther(BigInt(s.vol)));
-  const days = Object.keys(s.daily).sort().slice(-14);
-  const dVals = days.map((d) => Number(E.formatEther(BigInt(s.daily[d]))));
-  const maxD = Math.max(...dVals, 0.0001);
-  const W = 600, H = 160, bw = W / Math.max(days.length, 1);
-  const bars = days.map((d, i) => {
-    const h = (dVals[i] / maxD) * (H - 30);
-    return `<rect x="${i * bw + 3}" y="${H - 20 - h}" width="${bw - 6}" height="${Math.max(h, 1)}" rx="4" fill="#5FBE12"/>
-      <text x="${i * bw + bw / 2}" y="${H - 6}" text-anchor="middle" font-size="8" fill="#6F7F5C" font-family="JetBrains Mono">${d.slice(5)}</text>`;
+
+  // hourly volume, last 24h, aggregated across all tokens
+  const buckets = Array(24).fill(0);
+  const now = Date.now();
+  for (const pt of Object.values(s.perToken || {})) {
+    for (const [ts, wei] of (pt.t24 || [])) {
+      const h = Math.floor((now - ts) / 3600000);
+      if (h >= 0 && h < 24) buckets[23 - h] += Number(E.formatEther(BigInt(wei)));
+    }
+  }
+  const maxB = Math.max(...buckets, 0.0001);
+  const W = 600, H = 150, bw = W / 24;
+  const bars = buckets.map((v, i) => {
+    const bh = (v / maxB) * (H - 28);
+    const hoursAgo = 23 - i;
+    return `<rect x="${i * bw + 2}" y="${H - 18 - bh}" width="${bw - 4}" height="${Math.max(bh, 1)}" rx="3" fill="${v > 0 ? "#5FBE12" : "#223014"}"/>` +
+      (hoursAgo % 6 === 0 ? `<text x="${i * bw + bw / 2}" y="${H - 5}" text-anchor="middle" font-size="8" fill="#6F7F5C" font-family="JetBrains Mono">-${hoursAgo}h</text>` : "");
   }).join("");
-  const top = Object.entries(s.perToken).map(([a, v]) => ({ a, vol: Number(E.formatEther(BigInt(v.vol))), trades: v.trades }))
-    .sort((x, y) => y.vol - x.vol).slice(0, 10);
+
+  const top = Object.entries(s.perToken || {}).map(([a, v]) => ({ a, vol: Number(E.formatEther(BigInt(v.vol))), trades: v.trades }))
+    .filter((x) => x.vol > 0).sort((x, y) => y.vol - x.vol).slice(0, 10);
   const nameOf = (a) => { const t = tokens.find((x) => x.addr.toLowerCase() === a); return t ? `${t.name} ($${t.symbol})` : short(a); };
-  const card = (lbl, val) => `<div class="panel" style="text-align:center"><div style="font-size:11px;color:var(--faint);margin-bottom:6px">${lbl}</div><div style="font-family:'JetBrains Mono';font-weight:700;font-size:20px">${val}</div></div>`;
+  const card = (lbl, val) => `<div class="panel" style="text-align:center;padding:12px"><div style="font-size:10.5px;color:var(--faint);margin-bottom:4px">${lbl}</div><div style="font-family:'JetBrains Mono';font-weight:700;font-size:17px">${val}</div></div>`;
+
   $("statsView").style.display = "block";
   $("statsView").innerHTML = `
+    <div style="max-width:1000px;margin:0 auto">
     <a class="back" href="/">← all tokens</a>
-    <div class="tpName" style="margin-bottom:16px">Analytics</div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px">
+    <div class="tpName" style="margin-bottom:14px">Analytics</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:12px">
       ${card("tokens launched", s.launches)}
       ${card("migrations", s.migrations)}
       ${card("total volume", volEth.toFixed(3) + " ETH")}
@@ -388,13 +400,14 @@ async function renderStats() {
       ${card("trades", s.buys + s.sells)}
       ${card("unique traders", s.traders)}
     </div>
-    <div class="panel" style="margin-bottom:14px">
-      <div style="font-size:12px;color:var(--faint);margin-bottom:8px">daily volume (ETH, last 14 days)</div>
-      <svg viewBox="0 0 ${W} ${H}" style="width:100%">${bars}</svg>
+    <div class="panel" style="margin-bottom:12px;padding:14px">
+      <div style="font-size:11px;color:var(--faint);margin-bottom:6px">volume by hour (ETH, last 24h)</div>
+      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:170px;display:block">${bars}</svg>
     </div>
-    <div class="panel">
-      <div style="font-size:12px;color:var(--faint);margin-bottom:4px">top tokens by volume</div>
+    <div class="panel" style="padding:14px">
+      <div style="font-size:11px;color:var(--faint);margin-bottom:4px">top tokens by volume</div>
       ${top.length ? top.map((t, i) => `<div class="trade"><span>#${i + 1} <a href="/t/${t.a}" style="color:var(--mint);text-decoration:none">${nameOf(t.a)}</a></span><span>${t.trades} trades</span><span>${t.vol.toFixed(3)} ETH</span></div>`).join("") : `<div style="color:var(--faint);font-size:13px;padding:12px 0">no trades yet</div>`}
+    </div>
     </div>`;
 }
 
