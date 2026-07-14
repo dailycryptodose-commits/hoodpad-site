@@ -203,6 +203,7 @@
   </a>
   <input id="searchBar" class="search" placeholder="search name, ticker, or paste CA…" oninput="doSearch(this.value)" onkeydown="if(event.key==='Enter')searchGo(this.value)">
   <div class="navBtns">
+    <button class="btn ghost" onclick="openBridge()">Bridge</button>
     <a href="/analytics" class="btn ghost" style="text-decoration:none">Analytics</a>
     <button class="btn ghost" id="themeBtn" onclick="toggleTheme()" title="theme">☀</button>
     <button class="btn ghost" id="connectBtn" onclick="connect()">Connect wallet</button>
@@ -239,6 +240,28 @@
 <div class="tpage" id="tokenView"></div>
 
 <div class="tpage" id="statsView"></div>
+
+<!-- bridge modal -->
+<div class="modalBg" id="bridgeModal">
+  <div class="modal">
+    <button class="closeX" onclick="closeModals()">✕</button>
+    <div class="mTitle">Bridge to Robinhood Chain</div>
+    <div class="mSub">move ETH from any chain — powered by Relay</div>
+    <div class="field"><label>From</label>
+      <select id="brFrom" style="width:100%;background:#0C1107;border:1px solid var(--line2);border-radius:12px;color:var(--txt);font-family:'JetBrains Mono';font-size:14px;padding:12px 14px;outline:none">
+        <option value="ethereum">Ethereum</option>
+        <option value="arbitrum" selected>Arbitrum</option>
+        <option value="base">Base</option>
+        <option value="optimism">Optimism</option>
+        <option value="solana">Solana</option>
+      </select>
+    </div>
+    <div class="field"><label>Amount (ETH)</label><input id="brAmt" placeholder="0.05" inputmode="decimal"></div>
+    <div class="quote" id="brQuote">arrives on robinhood chain in ~1-2 min</div>
+    <button class="btn" style="width:100%;padding:13px" onclick="doBridge()">Bridge to Robinhood Chain 🌉</button>
+    <div class="note">your wallet confirms the transfer — funds land on robinhood chain (chain 4663) ready to trade on robn.fun.</div>
+  </div>
+</div>
 
 <!-- launch modal -->
 <div class="modalBg" id="launchModal">
@@ -1049,6 +1072,16 @@ async function connect() {
 async function needWallet() { if (!signer) await connect(); return !!signer; }
 
 // ---- launch ----
+function openBridge() { $("bridgeModal").classList.add("open"); }
+function doBridge() {
+  const from = $("brFrom").value;
+  const amt = parseFloat($("brAmt").value) || "";
+  const url = `https://relay.link/bridge/robinhood?fromChainId=${
+    { ethereum: 1, arbitrum: 42161, base: 8453, optimism: 10, solana: 792703809 }[from] || 42161
+  }${amt ? "&amount=" + amt : ""}`;
+  window.open(url, "_blank", "noopener");
+}
+
 function openLaunch() { $("launchModal").classList.add("open"); }
 function closeModals() { document.querySelectorAll(".modalBg").forEach((m) => m.classList.remove("open")); }
 
