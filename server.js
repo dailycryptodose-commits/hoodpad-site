@@ -1,6 +1,8 @@
 const express = require("express");
 const path = require("path");
 const fs = require("fs");
+const http = require("http");
+const { WebSocketServer } = require("ws");
 const { ethers } = require("ethers");
 
 const app = express();
@@ -87,8 +89,51 @@ for (const f of ["logo-wide.png", "logo-dark.png", "logo-light.png"]) {
 }
 app.get("/", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
 
+// ---- realtime: websocket push of trades & launches (~2.5s from chain) ----
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server, path: "/ws" });
+function broadcast(msg) {
+  const data = JSON.stringify(msg);
+  for (const c of wss.clients) { if (c.readyState === 1) { try { c.send(data); } catch (e) {} } }
+}
+
+let wsLastBlock = 0;
+async function fastWatch() {
+  if (!PAD) return;
+  try {
+    const latest = await provider.getBlockNumber();
+    if (!wsLastBlock) { wsLastBlock = latest; return; }
+    if (latest <= wsLastBlock) return;
+    const logs = await provider.getLogs({ address: PAD, fromBlock: wsLastBlock + 1, toBlock: latest });
+    wsLastBlock = latest;
+    for (const log of logs) {
+      let p; try { p = padIface.parseLog(log); } catch (e) { continue; }
+      if (!p) continue;
+      if (p.name === "TokenCreated") {
+        broadcast({ t: "created", token: p.args.token, name: p.args.name, symbol: p.args.symbol, creator: p.args.creator });
+      }
+      if (p.name === "Buy" || p.name === "Sell") {
+        const tok = p.args.token;
+        let extra = {};
+        try {
+          const [price, curve, prog] = await Promise.all([padRead.priceWei(tok), padRead.curves(tok), padRead.progress(tok)]);
+          extra = { price: price.toString(), realEth: curve.realEth.toString(), prog: Number(prog), migrated: curve.migrated };
+        } catch (e) {}
+        broadcast({
+          t: "trade", token: tok, side: p.name === "Buy" ? "buy" : "sell",
+          who: p.name === "Buy" ? p.args.buyer : p.args.seller,
+          eth: (p.name === "Buy" ? p.args.ethIn : p.args.ethOut).toString(),
+          tx: log.transactionHash, ...extra,
+        });
+      }
+      if (p.name === "Migrated") broadcast({ t: "migrated", token: p.args.token });
+    }
+  } catch (e) {}
+}
+setInterval(fastWatch, 2500);
+
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log("hoodpad site running on " + port));
+server.listen(port, () => console.log("hoodpad site running on " + port));
 
 // ---- price recorder for charts (1-min ticks, kept in /data) ----
 const PRICES_FILE = path.join(DATA_DIR, "prices.json");

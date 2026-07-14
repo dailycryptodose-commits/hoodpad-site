@@ -312,6 +312,57 @@ async function ethPrice() {
   for (const [u, f] of srcs) { try { const r = await fetch(u); ethUsd = f(await r.json()); return; } catch (e) {} }
 }
 
+function connectLive() {
+  try {
+    const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
+    ws.onmessage = (ev) => {
+      let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+      handleLive(m);
+    };
+    ws.onclose = () => setTimeout(connectLive, 3000);
+    ws.onerror = () => { try { ws.close(); } catch (e) {} };
+  } catch (e) { setTimeout(connectLive, 5000); }
+}
+
+function handleLive(m) {
+  if (m.t === "created") {
+    toast(`🏹 $${m.symbol} just launched!`);
+    if (!pageToken && !statsPage && !seasonPage) loadTokens();
+    return;
+  }
+  if (m.t === "migrated") {
+    toast("🎓 a token just graduated to uniswap!");
+    loadTokens();
+    return;
+  }
+  if (m.t === "trade") {
+    // current token page: instant update
+    if (pageToken && currentToken && m.token.toLowerCase() === pageToken.toLowerCase()) {
+      const t = currentToken;
+      if (m.price) { t.priceEth = Number(E.formatEther(BigInt(m.price))); t.mcapUsd = t.priceEth * 1e9 * ethUsd; if (live) live.target = t.priceEth; }
+      if (m.realEth) t.realEth = Number(E.formatEther(BigInt(m.realEth)));
+      if (m.prog !== undefined) t.prog = Number(m.prog) / 100;
+      if (m.migrated !== undefined) t.migrated = m.migrated;
+      renderTokenPage(true);
+      prependTrade(m);
+    }
+    if (!pageToken) loadTokens();
+  }
+}
+
+function prependTrade(m) {
+  const el = $("tpTrades"); if (!el) return;
+  const row = document.createElement("div");
+  row.className = "trade";
+  row.style.animation = "popIn .35s ease";
+  row.innerHTML = `<a href="${EXPLORER}/tx/${m.tx}" target="_blank" rel="noopener" class="${m.side === "buy" ? "buyC" : "sellC"}">${m.side === "buy" ? "▲ buy" : "▼ sell"} ↗</a>
+    <a href="${EXPLORER}/address/${m.who}" target="_blank" rel="noopener">${short(m.who)}</a><span>${Number(E.formatEther(BigInt(m.eth))).toFixed(4)} ETH</span>`;
+  const header = el.firstElementChild;
+  if (header && header.nextSibling) el.insertBefore(row, header.nextSibling);
+  else el.appendChild(row);
+  while (el.children.length > 16) el.removeChild(el.lastChild);
+}
+
 const savedTheme = (() => { try { return localStorage.getItem("hp-theme") } catch (e) { return null } })() || "dark";
 document.body.dataset.theme = savedTheme;
 function toggleTheme() {
@@ -420,6 +471,7 @@ async function init() {
   pad = new E.Contract(PAD_ADDR, PAD_ABI, reader);
   await ethPrice();
   reconnectSilently();
+  connectLive();
   try { $("feeShow").textContent = E.formatEther(await pad.creationFee()); } catch (e) {}
   await loadTokens();
   if (pageToken) {
