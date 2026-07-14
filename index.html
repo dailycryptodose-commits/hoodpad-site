@@ -148,6 +148,11 @@
   .mcapBig .val{font-family:'JetBrains Mono';font-weight:700;font-size:30px;color:var(--green)}
   .rightCol{display:flex;flex-direction:column;gap:14px}
   .secLbl{font-size:10.5px;letter-spacing:2px;color:var(--faint);text-transform:uppercase;margin-bottom:10px}
+  .tradeTabs{display:flex;gap:6px;margin-bottom:14px}
+  .tradeTab{flex:1;padding:10px;border-radius:10px;border:1px solid var(--line2);background:transparent;color:var(--dim);font-family:'Sora';font-weight:600;font-size:14px;cursor:pointer}
+  .tradeTab.onBuy{background:var(--green);color:#0A1403;border-color:transparent}
+  .tradeTab.onSell{background:#3A1518;color:#F0A0A0;border-color:transparent}
+  .ctaSell{background:#3A1518!important;color:#F0A0A0!important;box-shadow:none!important}
   .tpName{font-family:'Unbounded';font-weight:700;font-size:26px}
   .tpAddr{font-family:'JetBrains Mono';font-size:11.5px;color:var(--faint);word-break:break-all;margin-bottom:14px;cursor:pointer}
   .back{font-family:'JetBrains Mono';font-size:12px;color:var(--dim);text-decoration:none;display:inline-block;margin-bottom:18px}
@@ -584,47 +589,45 @@ async function renderTokenPage(soft) {
   $("tpBonded").textContent = t.migrated ? "migrated ✓" : t.prog.toFixed(1) + "%";
 }
 
+let tradeTab = "buy";
 async function fillTradePanel(t) {
   let bal = null, ethBal = null;
   if (wallet) {
     try { bal = await new E.Contract(t.addr, TOK_ABI, reader).balanceOf(wallet); } catch (e) {}
     try { ethBal = await reader.getBalance(wallet); } catch (e) {}
   }
+  window._sellBal = bal;
   window._ethBal = ethBal;
+  const buying = tradeTab === "buy";
   $("tpPanel").innerHTML = `
     ${wallet && wallet.toLowerCase() === t.creator.toLowerCase() ? `<div style="margin-bottom:14px"><button class="btn ghost" style="font-size:12px;padding:7px 12px" onclick="openEditMetaPage()">edit token info</button></div>` : ""}
     ${t.migrated
-      ? `<div class="note">this token has migrated — trade it on the DEX.</div>`
-      : `<div class="field"><label>Buy (ETH)</label><input id="buyAmt" placeholder="0.01" inputmode="decimal" oninput="quoteB()"></div>
-         <div class="slideRow"><input type="range" min="0" max="100" value="0" id="buySlide" oninput="slideBuy(this.value)" ${ethBal === null ? "disabled" : ""}><span class="slidePct" id="buySlidePct">0%</span><span class="slideUsd" id="buyUsd"></span></div>
-         <div class="quickLbl">quick buy</div>
-         <div class="chips">
-           <button class="chip" onclick="setBuy(0.01)">0.01</button>
-           <button class="chip" onclick="setBuy(0.05)">0.05</button>
-           <button class="chip" onclick="setBuy(0.1)">0.1</button>
-           <button class="chip" onclick="setBuy(0.25)">0.25</button>
-           <button class="chip" onclick="setBuy(0.5)">0.5</button>
-           <button class="chip" onclick="setBuy(1)">1</button>
+      ? `<div class="note">this token has graduated — trade it on uniswap. chart above is live from dexscreener.</div>`
+      : `<div class="tradeTabs">
+           <button class="tradeTab ${buying ? "onBuy" : ""}" onclick="setTradeTab('buy')">Buy</button>
+           <button class="tradeTab ${buying ? "" : "onSell"}" onclick="setTradeTab('sell')">Sell</button>
          </div>
-         <div class="quote" id="buyQuote"></div>
-         <div class="field"><label>Sell (${t.symbol})</label><input id="sellAmt" placeholder="0" inputmode="decimal" oninput="quoteS()"></div>
-         <div class="slideRow"><input type="range" min="0" max="100" value="0" id="sellSlide" oninput="slideSell(this.value)" ${bal !== null && bal > 0n ? "" : "disabled"}><span class="slidePct" id="sellSlidePct">0%</span><span class="slideUsd" id="sellUsd"></span></div>
-         ${bal !== null && bal > 0n ? `<div class="quickLbl">quick sell</div>
+         <div class="field"><input id="${buying ? "buyAmt" : "sellAmt"}" placeholder="${buying ? "0.01" : "0"}" inputmode="decimal" oninput="${buying ? "quoteB()" : "quoteS()"}"></div>
+         <div class="slideRow">
+           <input type="range" min="0" max="100" value="0" id="${buying ? "buySlide" : "sellSlide"}" oninput="${buying ? "slideBuy(this.value)" : "slideSell(this.value)"}" ${buying ? (ethBal === null ? "disabled" : "") : (bal !== null && bal > 0n ? "" : "disabled")}>
+           <span class="slidePct" id="${buying ? "buySlidePct" : "sellSlidePct"}">0%</span>
+           <span class="slideUsd" id="${buying ? "buyUsd" : "sellUsd"}"></span>
+         </div>
          <div class="chips">
-           <button class="chip" onclick="slideSyncSell(25)">25%</button>
-           <button class="chip" onclick="slideSyncSell(50)">50%</button>
-           <button class="chip" onclick="slideSyncSell(75)">75%</button>
-           <button class="chip" onclick="slideSyncSell(100)">100%</button>
-         </div>` : ""}
-         ${wallet ? "" : `<div class="quote">connect wallet to use the sliders</div>`}
-         <div class="quote" id="sellQuote"></div>
-         <div class="row2">
-           <button class="btn" onclick="doBuy()">Buy</button>
-           <button class="btn sellBtn" onclick="doSell()">Sell</button>
-         </div>`}
+           ${buying
+             ? [0.01, 0.05, 0.1, 0.25, 0.5, 1].map((v) => `<button class="chip" style="flex:1" onclick="setBuy(${v})">${v}</button>`).join("")
+             : [25, 50, 75, 100].map((p) => `<button class="chip" style="flex:1" onclick="slideSyncSell(${p})">${p}%</button>`).join("")}
+         </div>
+         <div class="quote" id="${buying ? "buyQuote" : "sellQuote"}"></div>
+         <button class="btn ${buying ? "" : "ctaSell"}" style="width:100%;padding:13px" onclick="${buying ? "doBuy()" : "doSell()"}">${buying ? "Buy" : "Sell"} $${t.symbol}</button>
+         ${wallet ? "" : `<div class="quote" style="margin-top:10px">connect wallet to trade</div>`}`}
     <div class="status" id="tStatus"></div>`;
-  window._sellBal = bal;
   if (currentToken) loadHolders(currentToken);
+}
+
+function setTradeTab(tab) {
+  tradeTab = tab;
+  if (currentToken) fillTradePanel(currentToken);
 }
 
 let curveParams = null;
