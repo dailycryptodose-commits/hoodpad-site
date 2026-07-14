@@ -241,6 +241,9 @@
 
 <div class="tpage" id="statsView"></div>
 
+<!-- turbo modal -->
+<div class="modalBg" id="turboModal"><div class="modal" id="turboInner"></div></div>
+
 <!-- bridge modal -->
 <div class="modalBg" id="bridgeModal">
   <div class="modal">
@@ -508,6 +511,7 @@ async function init() {
   PAD_ADDR = cfg.pad;
   reader = new E.JsonRpcProvider(RPC);
   pad = new E.Contract(PAD_ADDR, PAD_ABI, reader);
+  loadTurbo();
   await ethPrice();
   reconnectSilently();
   connectLive();
@@ -615,9 +619,10 @@ async function renderTokenPage(soft) {
 let tradeTab = "buy";
 async function fillTradePanel(t) {
   let bal = null, ethBal = null;
-  if (wallet) {
-    try { bal = await new E.Contract(t.addr, TOK_ABI, reader).balanceOf(wallet); } catch (e) {}
-    try { ethBal = await reader.getBalance(wallet); } catch (e) {}
+  const who = (turbo.on && turbo.wallet) ? turbo.wallet.address : wallet;
+  if (who) {
+    try { bal = await new E.Contract(t.addr, TOK_ABI, reader).balanceOf(who); } catch (e) {}
+    try { ethBal = await reader.getBalance(who); } catch (e) {}
   }
   window._sellBal = bal;
   window._ethBal = ethBal;
@@ -626,7 +631,8 @@ async function fillTradePanel(t) {
     ${wallet && wallet.toLowerCase() === t.creator.toLowerCase() ? `<div style="margin-bottom:14px"><button class="btn ghost" style="font-size:12px;padding:7px 12px" onclick="openEditMetaPage()">edit token info</button></div>` : ""}
     ${t.migrated
       ? `<div class="note">this token has graduated — trade it on uniswap. chart above is live from dexscreener.</div>`
-      : `<div class="tradeTabs">
+      : `<div style="margin-bottom:12px"><button class="btn ghost" style="width:100%;font-size:12px;padding:8px" onclick="${turbo.wallet ? "openTurbo()" : "enableTurbo()"}">${turbo.on ? "⚡ 1-click ON · " + Number(E.formatEther(ethBal || 0n)).toFixed(4) + " ETH · manage" : "⚡ enable 1-click trading"}</button></div>
+         <div class="tradeTabs">
            <button class="tradeTab ${buying ? "onBuy" : ""}" onclick="setTradeTab('buy')">Buy</button>
            <button class="tradeTab ${buying ? "" : "onSell"}" onclick="setTradeTab('sell')">Sell</button>
          </div>
@@ -1175,30 +1181,125 @@ async function quoteS() {
 }
 
 async function doBuy() {
-  if (!(await needWallet())) return;
+  const useTurbo = turbo.on && turbo.wallet;
+  if (!useTurbo && !(await needWallet())) return;
   const v = parseFloat($("buyAmt").value); if (!v) return;
-  const st = $("tStatus"); st.className = "status"; st.textContent = "confirm in wallet…";
+  const st = $("tStatus"); st.className = "status";
+  st.textContent = useTurbo ? "⚡ sending…" : "confirm in wallet…";
   try {
-    const tx = await pad.connect(signer).buy(currentToken.addr, { value: E.parseEther(v.toString()) });
-    st.textContent = "buying… "; await tx.wait();
-    st.className = "status ok"; st.textContent = "✅ bought"; refreshCurrentToken(); loadTokens();
+    const tx = await pad.connect(tradeSigner()).buy(currentToken.addr, { value: E.parseEther(v.toString()) });
+    st.textContent = "buying…"; await tx.wait();
+    st.className = "status ok"; st.textContent = useTurbo ? "⚡ bought" : "✅ bought";
+    refreshCurrentToken(); loadTokens();
   } catch (e) { st.className = "status err"; st.textContent = e.shortMessage || e.message; }
 }
 
 async function doSell() {
-  if (!(await needWallet())) return;
+  const useTurbo = turbo.on && turbo.wallet;
+  if (!useTurbo && !(await needWallet())) return;
   const v = parseFloat($("sellAmt").value); if (!v) return;
   const st = $("tStatus"); st.className = "status";
   try {
     const amt = sellAmtWei();
-    const tok = new E.Contract(currentToken.addr, TOK_ABI, signer);
-    const allow = await tok.allowance(wallet, PAD_ADDR);
-    if (allow < amt) { st.textContent = "approve first — confirm in wallet…"; const a = await tok.approve(PAD_ADDR, E.MaxUint256); await a.wait(); }
-    st.textContent = "confirm sell in wallet…";
-    const tx = await pad.connect(signer).sell(currentToken.addr, amt);
+    const s = tradeSigner();
+    const owner = useTurbo ? turbo.wallet.address : wallet;
+    const tok = new E.Contract(currentToken.addr, TOK_ABI, s);
+    const allow = await tok.allowance(owner, PAD_ADDR);
+    if (allow < amt) {
+      st.textContent = useTurbo ? "⚡ approving…" : "approve first — confirm in wallet…";
+      const a = await tok.approve(PAD_ADDR, E.MaxUint256); await a.wait();
+    }
+    st.textContent = useTurbo ? "⚡ selling…" : "confirm sell in wallet…";
+    const tx = await pad.connect(s).sell(currentToken.addr, amt);
     st.textContent = "selling…"; await tx.wait();
-    st.className = "status ok"; st.textContent = "✅ sold"; refreshCurrentToken(); loadTokens();
+    st.className = "status ok"; st.textContent = useTurbo ? "⚡ sold" : "✅ sold";
+    refreshCurrentToken(); loadTokens();
   } catch (e) { st.className = "status err"; st.textContent = e.shortMessage || e.message; }
+}
+
+// ⚡ turbo: local trading wallet for 1-click, zero-popup trades
+let turbo = { on: false, wallet: null };
+function loadTurbo() {
+  try {
+    const k = localStorage.getItem("robn-turbo-key");
+    if (k) turbo.wallet = new E.Wallet(k, reader);
+    turbo.on = localStorage.getItem("robn-turbo-on") === "1" && !!turbo.wallet;
+  } catch (e) {}
+}
+function tradeSigner() { return (turbo.on && turbo.wallet) ? turbo.wallet : signer; }
+async function turboBal() { try { return await reader.getBalance(turbo.wallet.address); } catch (e) { return 0n; } }
+
+async function enableTurbo() {
+  if (!turbo.wallet) {
+    const w = E.Wallet.createRandom();
+    try { localStorage.setItem("robn-turbo-key", w.privateKey); } catch (e) { toast("browser storage blocked — can't enable"); return; }
+    turbo.wallet = new E.Wallet(w.privateKey, reader);
+  }
+  turbo.on = true;
+  try { localStorage.setItem("robn-turbo-on", "1"); } catch (e) {}
+  openTurbo();
+  if (currentToken) fillTradePanel(currentToken);
+}
+function disableTurbo() {
+  turbo.on = false;
+  try { localStorage.setItem("robn-turbo-on", "0"); } catch (e) {}
+  closeModals();
+  if (currentToken) fillTradePanel(currentToken);
+}
+
+async function openTurbo() {
+  $("turboModal").classList.add("open");
+  const bal = turbo.wallet ? await turboBal() : 0n;
+  $("turboInner").innerHTML = `
+    <button class="closeX" onclick="closeModals()">✕</button>
+    <div class="mTitle">⚡ 1-click trading</div>
+    <div class="mSub">a trading wallet that lives in this browser — trades fire instantly, no popups. keep small amounts only.</div>
+    <div class="field"><label>trading wallet</label>
+      <div class="caChip" style="margin:0" onclick="navigator.clipboard.writeText('${turbo.wallet.address}');toast('address copied')">${short(turbo.wallet.address)} ⧉</div></div>
+    <div class="heroStats" style="margin:14px 0">
+      <div><span class="lbl">balance</span><span class="val">${Number(E.formatEther(bal)).toFixed(4)} ETH</span></div>
+      <div><span class="lbl">status</span><span class="val" style="color:${turbo.on ? "var(--green)" : "var(--faint)"}">${turbo.on ? "ON" : "OFF"}</span></div>
+    </div>
+    <div class="field"><label>deposit from your main wallet (one confirmation)</label><input id="tbAmt" placeholder="0.05" inputmode="decimal"></div>
+    <div class="row2" style="margin-bottom:10px">
+      <button class="btn" onclick="turboDeposit()">Deposit</button>
+      <button class="btn ghost" onclick="turboWithdraw()">Withdraw all</button>
+    </div>
+    <div class="row2">
+      <button class="btn ghost" style="font-size:12px" onclick="turboExport()">Export key</button>
+      <button class="btn ghost" style="font-size:12px" onclick="${turbo.on ? "disableTurbo()" : "enableTurbo()"}">${turbo.on ? "Turn off" : "Turn on"}</button>
+    </div>
+    <div class="status" id="tbStatus"></div>
+    <div class="note">the key is stored only in this browser. export and back it up — clearing browser data deletes it. withdraw returns everything to your connected wallet.</div>`;
+}
+
+async function turboDeposit() {
+  if (!(await needWallet())) return;
+  const v = parseFloat($("tbAmt").value); if (!v) return;
+  const st = $("tbStatus"); st.className = "status"; st.textContent = "confirm in wallet…";
+  try {
+    const tx = await signer.sendTransaction({ to: turbo.wallet.address, value: E.parseEther(v.toString()) });
+    st.textContent = "depositing…"; await tx.wait();
+    st.className = "status ok"; st.textContent = "✅ deposited — trades are now 1-click";
+    openTurbo();
+  } catch (e) { st.className = "status err"; st.textContent = e.shortMessage || e.message; }
+}
+async function turboWithdraw() {
+  if (!wallet) { toast("connect your main wallet first"); return; }
+  const st = $("tbStatus"); st.className = "status"; st.textContent = "withdrawing…";
+  try {
+    const bal = await turboBal();
+    const gas = E.parseEther("0.0003");
+    if (bal <= gas) { st.className = "status err"; st.textContent = "nothing to withdraw"; return; }
+    const tx = await turbo.wallet.sendTransaction({ to: wallet, value: bal - gas });
+    await tx.wait();
+    st.className = "status ok"; st.textContent = "✅ sent back to your wallet";
+    openTurbo();
+  } catch (e) { st.className = "status err"; st.textContent = e.shortMessage || e.message; }
+}
+function turboExport() {
+  const st = $("tbStatus"); st.className = "status";
+  st.textContent = "key: " + turbo.wallet.privateKey + " — save it somewhere safe, then clear this";
 }
 
 let pickedImage = { l: null, e: null };
