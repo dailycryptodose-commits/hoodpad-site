@@ -519,7 +519,9 @@ async function renderTokenPage(soft) {
           <div class="statBox"><span class="lbl">holders</span><span class="val" id="stHolders">…</span></div>
         </div>
         <div class="panel chartPanel">
-          <div class="chartWrap"><svg id="chartSvg" viewBox="0 0 600 240" preserveAspectRatio="none"></svg><div class="chartEmpty" id="chartEmpty" style="display:none">chart starts filling from launch — check back soon</div></div>
+          ${t.migrated
+            ? `<iframe src="https://dexscreener.com/robinhood/${t.addr}?embed=1&theme=${document.body.dataset.theme === "light" ? "light" : "dark"}&info=0" style="width:100%;height:560px;border:0;border-radius:12px" title="chart"></iframe>`
+            : `<div class="chartWrap"><svg id="chartSvg" viewBox="0 0 600 240" preserveAspectRatio="none"></svg><div class="chartEmpty" id="chartEmpty" style="display:none">chart starts filling from launch — check back soon</div></div>`}
           <div class="heroStats" style="margin-top:14px;flex-wrap:wrap;gap:16px">
             <div><span class="lbl">mcap</span><span class="val" id="tpMcap"></span></div>
             <div><span class="lbl">raised</span><span class="val" id="tpRaised"></span></div>
@@ -707,6 +709,7 @@ function openEditMetaPage() { $("tradeModal").classList.add("open"); openEditMet
 let live = null; // 60fps time-scrolling chart
 
 async function drawChart(t) {
+  if (t.migrated) { stopLiveChart(); return; } // dexscreener embed handles graduated tokens
   if (live && live.addr === t.addr) return;
   stopLiveChart();
   const WINDOW = 75_000; // ms of history on screen
