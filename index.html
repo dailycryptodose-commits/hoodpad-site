@@ -335,6 +335,7 @@ async function renderSeason() {
   const myRank = me ? d.board.indexOf(me) + 1 : null;
   $("statsView").style.display = "block";
   $("statsView").innerHTML = `
+    <div style="max-width:1000px;margin:0 auto">
     <a class="back" href="/">← all tokens</a>
     <div class="tpName" style="margin-bottom:6px">🪂 Season 1</div>
     <div style="color:var(--dim);font-size:13.5px;margin-bottom:18px;line-height:1.6">
@@ -355,6 +356,7 @@ async function renderSeason() {
         <a href="${EXPLORER}/address/${r.a}" target="_blank" rel="noopener">${short(r.a)}</a>
         <span style="color:var(--green);font-weight:700">${r.p.toLocaleString()} pts</span></div>`).join("")
         : `<div style="color:var(--faint);font-size:13px;padding:12px 0">nobody yet — first trade takes #1</div>`}
+    </div>
     </div>`;
 }
 
