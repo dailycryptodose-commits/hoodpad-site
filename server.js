@@ -468,6 +468,30 @@ function mapPool(d) {
     };
   } catch (e) { return null; }
 }
+const searchCache = new Map();
+app.get("/api/poolsearch", async (req, res) => {
+  try {
+    const q = String(req.query.q || "").trim().slice(0, 64);
+    if (q.length < 2) return res.json({ pools: [] });
+    const hit = searchCache.get(q.toLowerCase());
+    if (hit && Date.now() - hit.ts < 60_000) return res.json(hit.data);
+    let pools = [];
+    if (/^0x[0-9a-fA-F]{40}$/.test(q)) {
+      const j = await fetch(GT + "/tokens/" + q + "/pools", { headers: { accept: "application/json" } })
+        .then((r) => (r.ok ? r.json() : null)).catch(() => null);
+      pools = j && j.data ? j.data.map(mapPool).filter(Boolean) : [];
+    } else {
+      const j = await fetch("https://api.geckoterminal.com/api/v2/search/pools?query=" + encodeURIComponent(q) + "&network=robinhood", { headers: { accept: "application/json" } })
+        .then((r) => (r.ok ? r.json() : null)).catch(() => null);
+      pools = j && j.data ? j.data.map(mapPool).filter(Boolean) : [];
+    }
+    const data = { pools: pools.slice(0, 10) };
+    searchCache.set(q.toLowerCase(), { ts: Date.now(), data });
+    if (searchCache.size > 500) searchCache.clear();
+    res.json(data);
+  } catch (e) { res.json({ pools: [] }); }
+});
+
 app.get("/api/trenches", (req, res) => {
   res.json(trenchCache.data || { ts: Date.now(), trending: [], top: [], fresh: [] });
 });

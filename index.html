@@ -835,7 +835,7 @@ async function fillXPanel() {
     return;
   }
   const turboEmpty = turbo.on && (ethBal === null || ethBal < E.parseEther("0.002"));
-  const certBadge = (!TRENCH_SWAPS_ENABLED && certMode) ? `<div class="note" style="border:1px solid var(--green);color:var(--green);margin-bottom:12px">🔬 CERTIFICATION MODE — swaps visible to the owner wallet only. verify with $2 per route, then flip TRENCH_SWAPS_ENABLED to open for everyone.</div>` : "";
+  const certBadge = "";
   const dustLiq = xTok.liq < 25000;
   el.innerHTML = `
     ${certBadge}
@@ -2148,6 +2148,15 @@ async function doSearch(v) {
       const href = "/x/" + p.pair;
       if (match && !seen.has(href)) { seen.add(href); hits.push({ label: p.name.split("/")[0].trim(), sub: "on hood chain · " + fmtUsd(p.vol24 || 0) + " 24h vol", href }); }
     }
+  }
+  if (!hits.length) {
+    try {
+      const r = await (await fetch("/api/poolsearch?q=" + encodeURIComponent(searchQ))).json();
+      for (const p of (r.pools || [])) {
+        if ((p.liq || 0) < 10000) continue; // same floor as everywhere else
+        hits.push({ label: (p.name || "?").split("/")[0].trim(), sub: "on hood chain · " + fmtUsd(p.vol24 || 0) + " 24h vol · " + fmtUsd(p.liq || 0) + " liq", href: "/x/" + p.pair });
+      }
+    } catch (e) {}
   }
   if (isAddr && !hits.length) hits.push({ label: short(searchQ), sub: "open as robn.fun token page", href: "/t/" + searchQ });
   box.innerHTML = hits.slice(0, 8).map((h) => `<a href="${h.href}" style="display:block;padding:10px 14px;text-decoration:none;color:var(--txt);border-bottom:1px solid var(--line)"><div style="font-weight:600;font-size:13.5px">${h.label}</div><div style="font-size:11px;color:var(--faint)">${h.sub}</div></a>`).join("") || `<div style="padding:12px 14px;color:var(--faint);font-size:12.5px">nothing found</div>`;
