@@ -594,7 +594,12 @@ function paintTrenches() {
   }
   document.querySelectorAll(".liqChip").forEach((b) => b.classList.toggle("on", Number(b.dataset.v) === trenchMinLiq));
   document.querySelectorAll(".volChip").forEach((b) => b.classList.toggle("on", Number(b.dataset.v) === trenchMinVol));
-  if (!list.length) { el.innerHTML = `<div style="color:var(--faint);padding:20px 0;font-size:13px">nothing matches these filters</div>`; return; }
+  if (!list.length) {
+    const anyData = (trenchData.trending || []).length || (trenchData.top || []).length || (trenchData.fresh || []).length;
+    el.innerHTML = `<div style="color:var(--faint);padding:20px 0;font-size:13px">${anyData ? "nothing matches these filters" : "warming up the trenches… auto-refreshing"}</div>`;
+    if (!anyData) setTimeout(loadTrenches, 5000);
+    return;
+  }
   const totalPages = Math.max(1, Math.ceil(list.length / TRENCH_PER_PAGE));
   if (trenchPg > totalPages) trenchPg = totalPages;
   const pageList = list.slice((trenchPg - 1) * TRENCH_PER_PAGE, trenchPg * TRENCH_PER_PAGE);

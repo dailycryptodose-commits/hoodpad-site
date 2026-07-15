@@ -132,51 +132,39 @@ async function fastWatch() {
 }
 setInterval(fastWatch, 2500);
 
-// chain-wide trade feed: watch the top pools' real trades, push to browsers
-let xtSeen = new Set();
-async function watchChainTrades() {
-  try {
-    if (!trenchCache.data) return;
-    const pools = [...(trenchCache.data.top || []), ...(trenchCache.data.trending || [])].slice(0, 5);
-    for (const p of pools) {
-      const j = await fetch(GT + "/pools/" + p.pair + "/trades", { headers: { accept: "application/json" } })
-        .then((r) => (r.ok ? r.json() : null)).catch(() => null);
-      if (!j || !j.data) continue;
-      for (const t of j.data.slice(0, 12)) {
-        const a = t.attributes || {};
-        const id = t.id || a.tx_hash;
-        if (!id || xtSeen.has(id)) continue;
-        xtSeen.add(id);
-        const ts = new Date(a.block_timestamp).getTime();
-        if (!ts || ts < Date.now() - 150_000) continue; // only fresh trades
-        broadcast({ t: "xtrade", name: (p.name || "?").split("/")[0].trim(), side: a.kind === "sell" ? "sell" : "buy", usd: Number(a.volume_in_usd) || 0 });
-      }
-    }
-    if (xtSeen.size > 3000) xtSeen = new Set([...xtSeen].slice(-1200));
-  } catch (e) {}
-}
-setInterval(watchChainTrades, 30000);
+// (chain trade watcher removed — ticker covers chain activity now)
 
-// keep the pool list warm server-side: 5 pages of top pools + trending + 2 pages of new
+// keep the pool list warm: gentle sequential fetches, timeouts, ~9 req/cycle
+function gtGet(u) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 8000);
+  return fetch(u, { headers: { accept: "application/json" }, signal: ctl.signal })
+    .then((r) => (r.ok ? r.json() : null)).catch(() => null).finally(() => clearTimeout(timer));
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let warming = false;
 async function warmTrenches() {
+  if (warming) return;
+  warming = true;
   try {
-    const get = (u) => fetch(u, { headers: { accept: "application/json" } }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
     const clean = (j) => (j && j.data ? j.data.map(mapPool).filter(Boolean) : []);
-    const pages = await Promise.all([
-      get(GT + "/trending_pools"),
-      ...[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((p) => get(GT + "/pools?sort=h24_volume_usd_desc&page=" + p)),
-      ...[1, 2, 3].map((p) => get(GT + "/new_pools?page=" + p)),
-    ]);
-    const tr = pages[0];
+    const results = [];
+    const urls = [
+      GT + "/trending_pools",
+      ...[1, 2, 3, 4, 5, 6].map((p) => GT + "/pools?sort=h24_volume_usd_desc&page=" + p),
+      GT + "/new_pools?page=1", GT + "/new_pools?page=2",
+    ];
+    for (const u of urls) { results.push(await gtGet(u)); await sleep(350); }
     const seen = new Set();
-    const top = pages.slice(1, 11).flatMap(clean).filter((p) => !seen.has(p.pair) && seen.add(p.pair));
+    const top = results.slice(1, 7).flatMap(clean).filter((p) => !seen.has(p.pair) && seen.add(p.pair));
     const seen2 = new Set();
-    const fresh = pages.slice(11).flatMap(clean).filter((p) => !seen2.has(p.pair) && seen2.add(p.pair));
-    const data = { ts: Date.now(), trending: clean(tr), top, fresh };
+    const fresh = results.slice(7).flatMap(clean).filter((p) => !seen2.has(p.pair) && seen2.add(p.pair));
+    const data = { ts: Date.now(), trending: clean(results[0]), top, fresh };
     if (data.trending.length || data.top.length || data.fresh.length) trenchCache = { ts: Date.now(), data };
-  } catch (e) {}
+  } catch (e) {} finally { warming = false; }
 }
 warmTrenches();
+setInterval(() => { if (!trenchCache.data) warmTrenches(); }, 12000); // fast retry until first success
 setInterval(warmTrenches, 60000);
 
 const port = process.env.PORT || 3000;
