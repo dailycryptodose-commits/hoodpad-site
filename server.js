@@ -134,6 +134,92 @@ setInterval(fastWatch, 2500);
 
 // (chain trade watcher removed — ticker covers chain activity now)
 
+// ================= FeeVault auto-claimer =================
+// pays VIP creators automatically. uses a self-generated throwaway wallet
+// (only powers: trigger claim() = pay creators, spend its own gas dust).
+const VAULT_ADDR = process.env.VAULT_ADDRESS || "0xab27fC0DB0cD4f9fE4aA59D5934522fe6E1Cc8E0";
+const VAULT_ABI2 = [
+  "function owed(address token) view returns (uint256)",
+  "function claim(address token)",
+  "function vipToken(address) view returns (bool)",
+  "event VIPAdded(address indexed token, uint256 baseline)",
+  "event VIPRemoved(address indexed token)",
+];
+const BOT_FILE = path.join(DATA_DIR, "claimbot.json");
+let claimBot = null, vipSet = new Set(), vipScanned = 0, botLowWarned = false;
+
+function loadClaimBot() {
+  try {
+    let st = null;
+    try { st = JSON.parse(fs.readFileSync(BOT_FILE, "utf8")); } catch (e) {}
+    if (!st || !st.key) {
+      const w = ethers.Wallet.createRandom();
+      st = { key: w.privateKey, lastBlock: 0, vips: [] };
+      fs.writeFileSync(BOT_FILE, JSON.stringify(st));
+    }
+    claimBot = new ethers.Wallet(st.key, provider);
+    vipSet = new Set(st.vips || []);
+    vipScanned = st.lastBlock || 0;
+    console.log("🤖 claim bot wallet:", claimBot.address, "— fund it with ~0.002 ETH for gas (one time)");
+  } catch (e) { console.log("claim bot init failed:", e.message); }
+}
+
+function saveClaimBot() {
+  try { fs.writeFileSync(BOT_FILE, JSON.stringify({ key: claimBot.privateKey, lastBlock: vipScanned, vips: [...vipSet] })); } catch (e) {}
+}
+
+async function scanVIPs() {
+  const vault = new ethers.Contract(VAULT_ADDR, VAULT_ABI2, provider);
+  const latest = await provider.getBlockNumber();
+  if (!vipScanned) vipScanned = Math.max(0, latest - 40000); // vault deployed today; generous lookback
+  let from = vipScanned + 1;
+  while (from <= latest) {
+    const to = Math.min(from + 9000, latest);
+    try {
+      const [adds, rems] = await Promise.all([
+        vault.queryFilter(vault.filters.VIPAdded(), from, to),
+        vault.queryFilter(vault.filters.VIPRemoved(), from, to),
+      ]);
+      const evs = [...adds.map((e) => ({ b: e.blockNumber, i: e.index, t: e.args.token.toLowerCase(), add: true })),
+                   ...rems.map((e) => ({ b: e.blockNumber, i: e.index, t: e.args.token.toLowerCase(), add: false }))]
+        .sort((a, b) => a.b - b.b || a.i - b.i);
+      for (const ev of evs) { if (ev.add) vipSet.add(ev.t); else vipSet.delete(ev.t); }
+      vipScanned = to;
+    } catch (e) { break; } // rpc hiccup: resume next cycle from vipScanned
+    from = to + 1;
+  }
+  saveClaimBot();
+}
+
+async function autoClaim() {
+  try {
+    if (!claimBot) return;
+    await scanVIPs();
+    if (!vipSet.size) return;
+    const bal = await provider.getBalance(claimBot.address);
+    if (bal < ethers.parseEther("0.0002")) {
+      if (!botLowWarned) { console.log("🤖 claim bot out of gas — send ~0.002 ETH to", claimBot.address); botLowWarned = true; }
+      return;
+    }
+    botLowWarned = false;
+    const vault = new ethers.Contract(VAULT_ADDR, VAULT_ABI2, claimBot);
+    for (const tok of vipSet) {
+      try {
+        const owed = await vault.owed(tok);
+        if (owed >= ethers.parseEther("0.00005")) {
+          const tx = await vault.claim(tok);
+          await tx.wait();
+          console.log("🤖 auto-claimed", ethers.formatEther(owed), "ETH for VIP token", tok);
+        }
+      } catch (e) {}
+    }
+  } catch (e) {}
+}
+loadClaimBot();
+setInterval(autoClaim, 5 * 60 * 1000);
+setTimeout(autoClaim, 20 * 1000); // first pass shortly after boot
+// ===========================================================
+
 // keep the pool list warm: gentle sequential fetches, timeouts, ~9 req/cycle
 function gtGet(u) {
   const ctl = new AbortController();
