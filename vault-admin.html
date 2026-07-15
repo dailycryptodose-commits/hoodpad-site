@@ -1,0 +1,202 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>robn.fun — vault admin</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.2/ethers.umd.min.js"></script>
+<style>
+  body{background:#0B1205;color:#EAF5DC;font-family:ui-monospace,Menlo,monospace;max-width:680px;margin:30px auto;padding:0 16px}
+  h1{font-size:20px} h2{font-size:13px;letter-spacing:2px;text-transform:uppercase;color:#5FBE12;margin:26px 0 8px}
+  .card{border:1px solid #223317;border-radius:14px;padding:16px;margin-bottom:14px;background:#101A08}
+  button{background:#5FBE12;color:#0A1403;border:0;border-radius:10px;padding:11px 16px;font-weight:700;font-family:inherit;cursor:pointer;margin:4px 6px 4px 0}
+  button.ghost{background:transparent;color:#EAF5DC;border:1px solid #33491f}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  input{background:#0B1205;border:1px solid #33491f;color:#EAF5DC;border-radius:10px;padding:10px;width:100%;box-sizing:border-box;font-family:inherit;margin:4px 0}
+  .st{font-size:12.5px;margin-top:8px;min-height:18px;white-space:pre-wrap;word-break:break-all}
+  .ok{color:#5FBE12}.err{color:#ff6b6b}
+  .kv{font-size:12.5px;line-height:1.8;word-break:break-all}
+</style></head><body>
+<h1>🏹 robn.fun vault admin</h1>
+<div class="card"><button id="connectBtn" onclick="connect()">Connect MetaMask</button><div class="st" id="connSt"></div></div>
+
+<h2>1 · deploy the vault (once)</h2>
+<div class="card">
+  <button onclick="deploy()">Deploy FeeVault</button>
+  <div class="st" id="depSt"></div>
+</div>
+
+<h2>2 · vault address</h2>
+<div class="card">
+  <input id="vaultAddr" placeholder="0x… (fills automatically after deploy)">
+  <button class="ghost" onclick="refreshStatus()">Refresh status</button>
+  <div class="kv" id="statusBox"></div>
+</div>
+
+<h2>3 · point platform fees at the vault</h2>
+<div class="card">
+  <button onclick="setFee(true)">Point fees → vault</button>
+  <button class="ghost" onclick="setFee(false)">Restore fees → my wallet</button>
+  <div class="st" id="feeSt"></div>
+</div>
+
+<h2>4 · VIP tokens (100% deals)</h2>
+<div class="card">
+  <input id="vipToken" placeholder="VIP's token CA (0x…)">
+  <button onclick="vip('addVIP')">Add VIP</button>
+  <button class="ghost" onclick="vip('removeVIP')">Remove VIP</button>
+  <button class="ghost" onclick="vipStatus()">Check token</button>
+  <button onclick="claim()">Claim → pay creator now</button>
+  <div class="st" id="vipSt"></div>
+</div>
+
+<h2>5 · withdraw platform revenue</h2>
+<div class="card">
+  <input id="wAmt" placeholder="amount in ETH (empty = everything)">
+  <button onclick="withdraw()">Withdraw to my wallet</button>
+  <div class="st" id="wSt"></div>
+</div>
+
+<script>
+const PAD = "0x09C0648d50c3eA9beca0834f27d004c244a20c3b";
+const CHAIN_HEX = "0x1237"; // 4663
+const RPC = "https://rpc.mainnet.chain.robinhood.com";
+const VAULT_ABI = [{"inputs":[{"internalType":"address","name":"_pad","type":"address"}],"stateMutability":"nonpayable","type":"constructor"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"token","type":"address"},{"indexed":true,"internalType":"address","name":"creator","type":"address"},{"indexed":false,"internalType":"uint256","name":"amount","type":"uint256"}],"name":"Matched","type":"event"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"token","type":"address"},{"indexed":false,"internalType":"uint256","name":"baseline","type":"uint256"}],"name":"VIPAdded","type":"event"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"token","type":"address"}],"name":"VIPRemoved","type":"event"},{"inputs":[{"internalType":"address","name":"token","type":"address"}],"name":"addVIP","outputs":[],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"address","name":"token","type":"address"}],"name":"claim","outputs":[],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"address","name":"","type":"address"}],"name":"matchedBase","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"address","name":"token","type":"address"}],"name":"owed","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"owner","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"pad","outputs":[{"internalType":"contract IPad","name":"","type":"address"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"address","name":"token","type":"address"}],"name":"removeVIP","outputs":[],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"address","name":"o","type":"address"}],"name":"setOwner","outputs":[],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"address","name":"","type":"address"}],"name":"vipToken","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"uint256","name":"amount","type":"uint256"}],"name":"withdraw","outputs":[],"stateMutability":"nonpayable","type":"function"},{"stateMutability":"payable","type":"receive"}];
+const VAULT_BYTECODE = "0x60a0604052348015600e575f80fd5b50604051610b63380380610b63833981016040819052602b91604c565b5f80546001600160a01b031916331790556001600160a01b03166080526077565b5f60208284031215605b575f80fd5b81516001600160a01b03811681146070575f80fd5b9392505050565b608051610ab86100ab5f395f81816101860152818161036d015281816106a10152818161079601526108a10152610ab85ff3fe608060405260043610610092575f3560e01c80638da5cb5b116100575780638da5cb5b1461013a5780639361266c14610175578063c9d7374c146101a8578063da6ca9f0146101e1578063df18e0471461021f575f80fd5b8063095dc5cf1461009d57806313af4035146100be5780631e83409a146100dd5780632e1a7d4d146100fc5780634f7d49511461011b575f80fd5b3661009957005b5f80fd5b3480156100a8575f80fd5b506100bc6100b7366004610975565b61023e565b005b3480156100c9575f80fd5b506100bc6100d8366004610975565b6102b8565b3480156100e8575f80fd5b506100bc6100f7366004610975565b610302565b348015610107575f80fd5b506100bc610116366004610997565b61052d565b348015610126575f80fd5b506100bc610135366004610975565b610601565b348015610145575f80fd5b505f54610158906001600160a01b031681565b6040516001600160a01b0390911681526020015b60405180910390f35b348015610180575f80fd5b506101587f000000000000000000000000000000000000000000000000000000000000000081565b3480156101b3575f80fd5b506101d36101c2366004610975565b60026020525f908152604090205481565b60405190815260200161016c565b3480156101ec575f80fd5b5061020f6101fb366004610975565b60016020525f908152604090205460ff1681565b604051901515815260200161016c565b34801561022a575f80fd5b506101d3610239366004610975565b61085a565b5f546001600160a01b031633146102705760405162461bcd60e51b8152600401610267906109ae565b60405180910390fd5b6001600160a01b0381165f81815260016020526040808220805460ff19169055517fcecbaf533f25f5b5d59a58b5d99361485cfa8b53f85f0ea2966a2c6232624ad29190a250565b5f546001600160a01b031633146102e15760405162461bcd60e51b8152600401610267906109ae565b5f80546001600160a01b0319166001600160a01b0392909216919091179055565b5f61030c8261085a565b90505f811161034c5760405162461bcd60e51b815260206004820152600c60248201526b1b9bdd1a1a5b99c81bddd95960a21b6044820152606401610267565b604051631661ee3760e11b81526001600160a01b0383811660048301525f917f000000000000000000000000000000000000000000000000000000000000000090911690632cc3dc6e9060240160a060405180830381865afa1580156103b4573d5f803e3d5ffd5b505050506040513d601f19601f820116820180604052508101906103d891906109d2565b509350506001600160a01b038316915061042390505760405162461bcd60e51b815260206004820152600a60248201526937379031b932b0ba37b960b11b6044820152606401610267565b6001600160a01b0383165f908152600260205260408120805484929061044a908490610a3f565b90915550506040515f906001600160a01b0383169084908381818185875af1925050503d805f8114610497576040519150601f19603f3d011682016040523d82523d5f602084013e61049c565b606091505b50509050806104da5760405162461bcd60e51b815260206004820152600a6024820152691c185e4819985a5b195960b21b6044820152606401610267565b816001600160a01b0316846001600160a01b03167fa43e18352491949f87be02f6d0a3bc9be85e85667286696ab07fda602481a9458560405161051f91815260200190565b60405180910390a350505050565b5f546001600160a01b031633146105565760405162461bcd60e51b8152600401610267906109ae565b5f81156105635781610565565b475b5f805460405192935090916001600160a01b039091169083908381818185875af1925050503d805f81146105b4576040519150601f19603f3d011682016040523d82523d5f602084013e6105b9565b606091505b50509050806105fc5760405162461bcd60e51b815260206004820152600f60248201526e1dda5d1a191c985dc819985a5b1959608a1b6044820152606401610267565b505050565b5f546001600160a01b0316331461062a5760405162461bcd60e51b8152600401610267906109ae565b6001600160a01b0381165f9081526001602052604090205460ff16156106805760405162461bcd60e51b815260206004820152600b60248201526a0616c7265616479207669760ac1b6044820152606401610267565b604051631661ee3760e11b81526001600160a01b0382811660048301525f917f000000000000000000000000000000000000000000000000000000000000000090911690632cc3dc6e9060240160a060405180830381865afa1580156106e8573d5f803e3d5ffd5b505050506040513d601f19601f8201168201806040525081019061070c91906109d2565b509350506001600160a01b038316915061075a90505760405162461bcd60e51b815260206004820152600d60248201526c3ab735b737bbb7103a37b5b2b760991b6044820152606401610267565b6001600160a01b038281165f81815260016020819052604091829020805460ff1916909117905551632d3fe3dd60e21b815260048101919091527f00000000000000000000000000000000000000000000000000000000000000009091169063b4ff8f7490602401602060405180830381865afa1580156107dd573d5f803e3d5ffd5b505050506040513d601f19601f820116820180604052508101906108019190610a58565b6001600160a01b0383165f81815260026020526040908190208390555190917ff84e0f31196cc446925724216bb4fbb01b573468d25fb796cc22c360cbaf29879161084e91815260200190565b60405180910390a25050565b6001600160a01b0381165f9081526001602052604081205460ff1661088057505f919050565b604051632d3fe3dd60e21b81526001600160a01b0383811660048301525f917f00000000000000000000000000000000000000000000000000000000000000009091169063b4ff8f7490602401602060405180830381865afa1580156108e8573d5f803e3d5ffd5b505050506040513d601f19601f8201168201806040525081019061090c9190610a58565b6001600160a01b0384165f9081526002602052604090205490915080821161093757505f9392505050565b5f6109428284610a6f565b9050478082116109525781610954565b805b9695505050505050565b6001600160a01b0381168114610972575f80fd5b50565b5f60208284031215610985575f80fd5b81356109908161095e565b9392505050565b5f602082840312156109a7575f80fd5b5035919050565b6020808252600a908201526937b7363c9037bbb732b960b11b604082015260600190565b5f805f805f60a086880312156109e6575f80fd5b85516020870151604088015160608901519297509095509350610a088161095e565b60808701519092508015158114610a1d575f80fd5b809150509295509295909350565b634e487b7160e01b5f52601160045260245ffd5b80820180821115610a5257610a52610a2b565b92915050565b5f60208284031215610a68575f80fd5b5051919050565b81810381811115610a5257610a52610a2b56fea26469706673582212204ab22737d73c29024c5a30606dae15a2e5c9557c7df978596412d4469b72e4d864736f6c634300081a0033";
+const PAD_ABI = [
+  "function setFeeWallet(address w) external",
+  "function feeWallet() view returns (address)",
+  "function owner() view returns (address)",
+  "function creatorFeesEarned(address) view returns (uint256)",
+  "function curves(address) view returns (uint256,uint256,uint256,address,bool)"
+];
+const E = ethers;
+let provider = null, signer = null, me = null;
+const $ = (id) => document.getElementById(id);
+const set = (id, msg, cls) => { const el = $(id); el.textContent = msg; el.className = "st " + (cls || ""); };
+
+async function connect() {
+  try {
+    if (!window.ethereum) return set("connSt", "no wallet extension found — open this page in the browser where MetaMask lives", "err");
+    provider = new E.BrowserProvider(window.ethereum);
+    await provider.send("eth_requestAccounts", []);
+    const net = await provider.getNetwork();
+    if (Number(net.chainId) !== 4663) {
+      try { await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: CHAIN_HEX }] }); }
+      catch (e) {
+        if (e.code === 4902) await window.ethereum.request({ method: "wallet_addEthereumChain", params: [{ chainId: CHAIN_HEX, chainName: "Robinhood Chain", nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 }, rpcUrls: [RPC] }] });
+        else throw e;
+      }
+      provider = new E.BrowserProvider(window.ethereum);
+    }
+    signer = await provider.getSigner();
+    me = await signer.getAddress();
+    const bal = await provider.getBalance(me);
+    set("connSt", "connected " + me + "  ·  " + Number(E.formatEther(bal)).toFixed(4) + " ETH on robinhood chain ✓", "ok");
+    const saved = localStorage.getItem("robn-vault");
+    if (saved && !$("vaultAddr").value) { $("vaultAddr").value = saved; refreshStatus(); }
+  } catch (e) { set("connSt", e.shortMessage || e.message, "err"); }
+}
+
+function needConn(id) { if (!signer) { set(id, "connect metamask first (top button)", "err"); return true; } return false; }
+function vaultC(ro) {
+  const a = $("vaultAddr").value.trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(a)) return null;
+  return new E.Contract(a, VAULT_ABI, ro ? provider : signer);
+}
+
+async function deploy() {
+  if (needConn("depSt")) return;
+  try {
+    set("depSt", "confirm in metamask…");
+    const f = new E.ContractFactory(VAULT_ABI, VAULT_BYTECODE, signer);
+    const c = await f.deploy(PAD);
+    set("depSt", "deploying… (waiting for the chain)");
+    await c.waitForDeployment();
+    const addr = await c.getAddress();
+    $("vaultAddr").value = addr;
+    localStorage.setItem("robn-vault", addr);
+    set("depSt", "✅ vault deployed: " + addr + "\nsend this address to claude, then continue to step 3.", "ok");
+    refreshStatus();
+  } catch (e) { set("depSt", e.shortMessage || e.message, "err"); }
+}
+
+async function refreshStatus() {
+  try {
+    const a = $("vaultAddr").value.trim();
+    if (!/^0x[0-9a-fA-F]{40}$/.test(a)) { $("statusBox").textContent = "paste a vault address first"; return; }
+    const ro = provider || new E.JsonRpcProvider(RPC);
+    const pad = new E.Contract(PAD, PAD_ABI, ro);
+    const [bal, fw] = await Promise.all([ro.getBalance(a), pad.feeWallet()]);
+    $("statusBox").innerHTML =
+      "vault balance: <b>" + Number(E.formatEther(bal)).toFixed(6) + " ETH</b><br>" +
+      "pad fees currently flow to: <b>" + fw + "</b><br>" +
+      (fw.toLowerCase() === a.toLowerCase() ? "→ <span class='ok'>the VAULT ✓ (matching is live-funded)</span>" : "→ your wallet (vault not receiving yet — run step 3)");
+  } catch (e) { $("statusBox").textContent = e.shortMessage || e.message; }
+}
+
+async function setFee(toVault) {
+  if (needConn("feeSt")) return;
+  try {
+    const pad = new E.Contract(PAD, PAD_ABI, signer);
+    const target = toVault ? $("vaultAddr").value.trim() : me;
+    if (!/^0x[0-9a-fA-F]{40}$/.test(target)) return set("feeSt", "need the vault address in step 2 first", "err");
+    set("feeSt", "confirm in metamask…");
+    const tx = await pad.setFeeWallet(target);
+    set("feeSt", "sending…");
+    await tx.wait();
+    set("feeSt", "✅ pad fees now flow to " + target + (toVault ? "\nNOW: do one small 0.001 buy on any robn token, then Refresh status — the vault balance should tick up." : ""), "ok");
+    refreshStatus();
+  } catch (e) { set("feeSt", e.shortMessage || e.message, "err"); }
+}
+
+async function vip(fn) {
+  if (needConn("vipSt")) return;
+  try {
+    const v = vaultC(); if (!v) return set("vipSt", "need the vault address in step 2", "err");
+    const t = $("vipToken").value.trim();
+    if (!/^0x[0-9a-fA-F]{40}$/.test(t)) return set("vipSt", "paste the VIP's token CA", "err");
+    set("vipSt", "confirm in metamask…");
+    const tx = await v[fn](t); await tx.wait();
+    set("vipSt", fn === "addVIP" ? "✅ VIP enrolled — 100% matching starts from this moment" : "✅ VIP removed — back to standard 50/50", "ok");
+  } catch (e) { set("vipSt", e.shortMessage || e.message, "err"); }
+}
+
+async function vipStatus() {
+  try {
+    const v = vaultC(true); if (!v) return set("vipSt", "need the vault address in step 2", "err");
+    const t = $("vipToken").value.trim();
+    if (!/^0x[0-9a-fA-F]{40}$/.test(t)) return set("vipSt", "paste the VIP's token CA", "err");
+    const ro = provider || new E.JsonRpcProvider(RPC);
+    const pad = new E.Contract(PAD, PAD_ABI, ro);
+    const [isVip, owed, earned, curve] = await Promise.all([v.vipToken(t), v.owed(t), pad.creatorFeesEarned(t), pad.curves(t)]);
+    set("vipSt", "creator: " + curve[3] + "\nVIP: " + isVip + "\nlifetime creator earnings: " + E.formatEther(earned) + " ETH\nowed by vault right now: " + E.formatEther(owed) + " ETH", "ok");
+  } catch (e) { set("vipSt", e.shortMessage || e.message, "err"); }
+}
+
+async function claim() {
+  if (needConn("vipSt")) return;
+  try {
+    const v = vaultC(); if (!v) return set("vipSt", "need the vault address in step 2", "err");
+    const t = $("vipToken").value.trim();
+    if (!/^0x[0-9a-fA-F]{40}$/.test(t)) return set("vipSt", "paste the VIP's token CA", "err");
+    const owed = await v.owed(t);
+    if (owed === 0n) return set("vipSt", "nothing owed right now");
+    set("vipSt", "owed " + E.formatEther(owed) + " ETH — confirm in metamask…");
+    const tx = await v.claim(t); await tx.wait();
+    set("vipSt", "✅ paid " + E.formatEther(owed) + " ETH to the creator", "ok");
+    refreshStatus();
+  } catch (e) { set("vipSt", e.shortMessage || e.message, "err"); }
+}
+
+async function withdraw() {
+  if (needConn("wSt")) return;
+  try {
+    const v = vaultC(); if (!v) return set("wSt", "need the vault address in step 2", "err");
+    const raw = $("wAmt").value.trim();
+    const amt = raw ? E.parseEther(raw) : 0n;
+    set("wSt", "confirm in metamask…");
+    const tx = await v.withdraw(amt); await tx.wait();
+    set("wSt", "✅ withdrawn", "ok");
+    refreshStatus();
+  } catch (e) { set("wSt", e.shortMessage || e.message, "err"); }
+}
+</script></body></html>

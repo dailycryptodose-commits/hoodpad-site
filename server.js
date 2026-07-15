@@ -308,6 +308,7 @@ app.get("/t/:token", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
 app.get("/creators", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+app.get("/vault-admin", (req, res) => res.sendFile(path.join(__dirname, "vault-admin.html")));
 
 // ---- analytics indexer ----
 const STATS_FILE = path.join(DATA_DIR, "stats.json");
