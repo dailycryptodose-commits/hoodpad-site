@@ -468,6 +468,22 @@ function mapPool(d) {
     };
   } catch (e) { return null; }
 }
+const poolCache = new Map();
+app.get("/api/pool/:pair", async (req, res) => {
+  try {
+    const pair = String(req.params.pair || "").toLowerCase();
+    if (!/^0x[0-9a-f]{40}$/.test(pair)) return res.json({ pool: null });
+    const hit = poolCache.get(pair);
+    if (hit && Date.now() - hit.ts < 60_000) return res.json(hit.data);
+    const j = await fetch(GT + "/pools/" + pair, { headers: { accept: "application/json" } })
+      .then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    const data = { pool: j && j.data ? mapPool(j.data) : null };
+    poolCache.set(pair, { ts: Date.now(), data });
+    if (poolCache.size > 500) poolCache.clear();
+    res.json(data);
+  } catch (e) { res.json({ pool: null }); }
+});
+
 const searchCache = new Map();
 app.get("/api/poolsearch", async (req, res) => {
   try {

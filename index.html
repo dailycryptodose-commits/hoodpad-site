@@ -708,7 +708,8 @@ async function renderExternalToken(pair) {
   $("statsView").style.display = "block";
   if (!trenchData) { try { trenchData = await (await fetch("/api/trenches")).json(); } catch (e) {} }
   const all = trenchData ? [...(trenchData.trending || []), ...(trenchData.top || []), ...(trenchData.fresh || [])] : [];
-  const p = all.find((x) => x.pair.toLowerCase() === pair.toLowerCase());
+  let p = all.find((x) => x.pair.toLowerCase() === pair.toLowerCase());
+  if (!p) { try { const r = await (await fetch("/api/pool/" + pair)).json(); if (r.pool) p = r.pool; } catch (e) {} }
   xTok = p || null;
   const name = p ? p.name.split("/")[0].trim() : short(pair);
   const ch = (p && p.ch) || {};
