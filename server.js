@@ -245,7 +245,14 @@ wss.on("connection", (ws, req) => {
     ws._ipHash = h;
     liveIps.set(h, (liveIps.get(h) || 0) + 1);
     if (liveIps.size > (visits.peak || 0)) { visits.peak = liveIps.size; try { fs.writeFileSync(VISIT_FILE, JSON.stringify(visits)); } catch (e) {} }
+    ws.on("message", (raw) => {
+      try {
+        const m = JSON.parse(String(raw).slice(0, 200));
+        if (m && m.watch !== undefined) { m.watch ? watchPool(ws, m.watch) : unwatchPool(ws); }
+      } catch (e) {}
+    });
     ws.on("close", () => {
+      unwatchPool(ws);
       const n = (liveIps.get(h) || 1) - 1;
       if (n <= 0) liveIps.delete(h); else liveIps.set(h, n);
     });
@@ -263,6 +270,100 @@ app.get("/api/live", (req, res) => {
     bestEver: visits.best || 0,
   });
 });
+
+// ---- live pool prices for /x/ pairs ----
+// ONE chain read per pool per tick, no matter how many people are watching it.
+// pool metadata (tokens/decimals/version) never changes, so it's read once and kept.
+const V3_POOL_ABI_S = [
+  "function token0() view returns (address)",
+  "function token1() view returns (address)",
+  "function fee() view returns (uint24)",
+  "function slot0() view returns (uint160 sqrtPriceX96, int24, uint16, uint16, uint16, uint8, bool)",
+];
+const V2_PAIR_ABI_S = [
+  "function token0() view returns (address)",
+  "function token1() view returns (address)",
+  "function getReserves() view returns (uint112, uint112, uint32)",
+];
+const WETH_S = "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73";
+const poolMeta = new Map();   // pair -> { v3, wethIs0, dec, c } | null when unusable
+const poolWatch = new Map();  // pair -> subscriber count
+const poolLast = new Map();   // pair -> last price (so a new viewer gets a value instantly)
+
+async function getPoolMeta(pair) {
+  if (poolMeta.has(pair)) return poolMeta.get(pair);
+  let meta = null;
+  try {
+    const W = WETH_S.toLowerCase();
+    let c = new ethers.Contract(pair, V3_POOL_ABI_S, provider), v3 = true, t0, t1;
+    try { [t0, t1] = await Promise.all([c.token0(), c.token1()]); await c.fee(); }
+    catch (e) { c = new ethers.Contract(pair, V2_PAIR_ABI_S, provider); v3 = false; [t0, t1] = await Promise.all([c.token0(), c.token1()]); }
+    const a = t0.toLowerCase(), b = t1.toLowerCase();
+    if (a === W || b === W) {
+      const wethIs0 = a === W;
+      const token = wethIs0 ? t1 : t0;
+      let dec = 18;
+      try { dec = Number(await new ethers.Contract(token, ["function decimals() view returns (uint8)"], provider).decimals()); } catch (e) {}
+      meta = { v3, wethIs0, dec, c };
+    }
+  } catch (e) { meta = null; }
+  poolMeta.set(pair, meta);
+  return meta;
+}
+
+async function readPoolPrice(pair) {
+  const m = await getPoolMeta(pair);
+  if (!m) return null;
+  const usd = ethUsdCache.v || (await warmEthUsd());
+  if (!usd) return null;
+  try {
+    let ethPerToken = null;
+    if (m.v3) {
+      const s = await m.c.slot0();
+      const raw = (Number(s[0]) / 2 ** 96) ** 2;
+      ethPerToken = m.wethIs0 ? 1 / (raw * 10 ** 18 / 10 ** m.dec) : raw * 10 ** m.dec / 10 ** 18;
+    } else {
+      const r = await m.c.getReserves();
+      const rw = m.wethIs0 ? r[0] : r[1], rt = m.wethIs0 ? r[1] : r[0];
+      if (rw > 0n && rt > 0n) ethPerToken = (Number(rw) / 1e18) / (Number(rt) / 10 ** m.dec);
+    }
+    if (!ethPerToken || !isFinite(ethPerToken)) return null;
+    return ethPerToken * usd;
+  } catch (e) { return null; }
+}
+
+async function poolTick() {
+  const pairs = [...poolWatch.keys()];
+  if (!pairs.length) return;
+  await Promise.all(pairs.map(async (pair) => {
+    const price = await readPoolPrice(pair);
+    if (price === null) return;
+    poolLast.set(pair, price);
+    const msg = JSON.stringify({ type: "xprice", pair, price });
+    for (const c of wss.clients) {
+      if (c.readyState === 1 && c._watching === pair) { try { c.send(msg); } catch (e) {} }
+    }
+  }));
+}
+setInterval(poolTick, 1200); // watched pools only — busy pairs move a lot between ticks
+
+function watchPool(ws, pair) {
+  unwatchPool(ws);
+  if (!/^0x[0-9a-fA-F]{40}$/.test(pair || "")) return;
+  pair = pair.toLowerCase();
+  ws._watching = pair;
+  poolWatch.set(pair, (poolWatch.get(pair) || 0) + 1);
+  const last = poolLast.get(pair);
+  if (last) { try { ws.send(JSON.stringify({ type: "xprice", pair, price: last })); } catch (e) {} }
+  else readPoolPrice(pair).then((p) => { if (p !== null) { poolLast.set(pair, p); try { ws.send(JSON.stringify({ type: "xprice", pair, price: p })); } catch (e) {} } });
+}
+function unwatchPool(ws) {
+  const p = ws._watching;
+  if (!p) return;
+  const n = (poolWatch.get(p) || 1) - 1;
+  if (n <= 0) poolWatch.delete(p); else poolWatch.set(p, n);
+  ws._watching = null;
+}
 
 function broadcast(msg) {
   const data = JSON.stringify(msg);

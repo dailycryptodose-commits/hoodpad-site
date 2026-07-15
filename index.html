@@ -448,9 +448,12 @@ function startPulse() {
   setInterval(tick, 45000);
 }
 
+let ws = null; // module-level: the live chart subscribes through this socket
+function wsSend(obj) { try { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); } catch (e) {} }
 function connectLive() {
   try {
-    const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
+    ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
+    ws.onopen = () => { if (live && live.usd) wsSend({ watch: live.addr }); }; // resubscribe after a drop
     ws.onmessage = (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
       handleLive(m);
@@ -501,6 +504,15 @@ function queueXToast(msg) {
 }
 
 function handleLive(m) {
+  if (m.type === "xprice") { // server-pushed pool price for the /x/ live chart
+    if (live && live.usd && live.addr.toLowerCase() === m.pair.toLowerCase() && m.price > 0) {
+      live.target = m.price;
+      if (!live.display) { live.display = m.price; live.pts = live.pts.map((p) => [p[0], m.price]); }
+      const ce = $("chartEmpty"); if (ce) ce.style.display = "none";
+      if (xTok) { xTok.priceUsd = m.price; const h = $("xFdv"); if (h && xTok.supply) h.textContent = fmtUsd(m.price * xTok.supply); }
+    }
+    return;
+  }
   if (m.t === "xtrade") return; // ticker bar covers chain activity now
   if (m.t === "created") {
     toast(`🏹 $${m.symbol} just launched!`);
@@ -792,13 +804,19 @@ async function renderExternalToken(pair) {
         ${p && p.onchain ? `<div class="note" style="font-size:11px">read live from the pool contract — this pair isn't indexed by our data provider yet, so volume and % history are unavailable.</div>` : ""}
       </div>
       <div class="panel chartPanel" style="padding:10px">
-        <iframe src="https://dexscreener.com/robinhood/${pair}?embed=1&theme=${document.body.dataset.theme === "light" ? "light" : "dark"}&info=0" style="width:100%;height:620px;border:0;border-radius:12px" title="chart"></iframe>
+        <div style="display:flex;gap:6px;margin-bottom:8px">
+          <button class="chip" id="xTabLive" onclick="xChartMode('live')">📈 live</button>
+          <button class="chip" id="xTabCandles" onclick="xChartMode('candles')">🕯 candles</button>
+        </div>
+        <div id="xChartLive"><div class="chartWrap" style="height:620px"><svg id="chartSvg" viewBox="0 0 600 240" preserveAspectRatio="none" style="height:100%"></svg><div class="chartEmpty" id="chartEmpty" style="display:none">waiting for the first price tick…</div></div></div>
+        <div id="xChartCandles" style="display:none"></div>
       </div>
       <div class="rightCol" style="grid-area:trade">
         <div class="panel" id="xPanel"><div class="quote">checking swap support…</div></div>
         <div class="panel"><div class="secLbl">🏹 robn.fun</div><div class="metaRow">launch your own token — earn ${CREATOR_PCT}% of every trade fee, forever.</div><a class="btn ghost" style="text-decoration:none;margin-top:10px;display:inline-block;font-size:12px" href="/">+ launch a token</a></div>
       </div>
     </div></div>`;
+  if (xTok) drawXChart(xTok);
   probeAndFillX(pair);
 }
 function xPct(v) {
@@ -1498,6 +1516,57 @@ async function refreshCurrentToken() {
 
 function openEditMetaPage() { $("tradeModal").classList.add("open"); openEditMeta(); }
 
+// /x/ chart: smooth live line by default, dexscreener candles on demand
+let xChartCur = "live";
+function xChartMode(m) {
+  xChartCur = m;
+  const L = $("xChartLive"), C = $("xChartCandles");
+  if (!L || !C) return;
+  $("xTabLive").classList.toggle("on", m === "live");
+  $("xTabCandles").classList.toggle("on", m === "candles");
+  if (m === "candles") {
+    L.style.display = "none"; C.style.display = "block";
+    if (!C.dataset.loaded && xTok) {
+      C.dataset.loaded = "1";
+      C.innerHTML = `<iframe src="https://dexscreener.com/robinhood/${xTok.pair}?embed=1&theme=${document.body.dataset.theme === "light" ? "light" : "dark"}&info=0" style="width:100%;height:620px;border:0;border-radius:12px" title="chart"></iframe>`;
+    }
+  } else {
+    C.style.display = "none"; L.style.display = "block";
+    if (xTok) drawXChart(xTok);
+  }
+}
+
+// same 60fps engine as the launchpad chart — only the price source differs.
+// the server does one chain read per pool and pushes it here, so this stays
+// buttery whether 1 person or a million are watching.
+async function drawXChart(t) {
+  if (live && live.addr === t.pair) return;
+  stopLiveChart();
+  const WINDOW = 75_000;
+  const now = performance.now();
+  const seed = t.priceUsd || 0;
+  live = { addr: t.pair, pts: [[now - WINDOW, seed]], target: seed, display: seed, raf: null, poll: null, lastSample: 0, dead: false, usd: true };
+  const ce = $("chartEmpty"); if (ce) ce.style.display = seed ? "none" : "flex";
+  wsSend({ watch: t.pair });
+  const frame = (ts) => {
+    if (!live || live.dead) return;
+    const dt = Math.min(ts - (live.lastFrame || ts - 16.7), 120); // clamp: rAF pauses on tab switch
+    live.lastFrame = ts;
+    live.display += (live.target - live.display) * easeK(dt);
+    if (ts - live.lastSample > 120) { live.pts.push([ts, live.display]); live.lastSample = ts; }
+    const cutoff = ts - WINDOW;
+    while (live.pts.length > 2 && live.pts[1][0] < cutoff) live.pts.shift();
+    renderLiveChart(ts, WINDOW);
+    live.raf = requestAnimationFrame(frame);
+  };
+  live.raf = requestAnimationFrame(frame);
+}
+
+// 0.06/frame felt right ONLY at 60Hz (tau ~= -16.7/ln(0.94) = 270ms). on a 120/144Hz
+// screen it converged 2-2.4x faster, then sat flat = the stutter. express it as time.
+const EASE_TAU = 270; // ms — ~99% converged at ~1.24s, just as the next 1.2s tick lands
+function easeK(dt) { return 1 - Math.exp(-dt / EASE_TAU); }
+
 let live = null; // 60fps time-scrolling chart
 
 async function drawChart(t) {
@@ -1528,8 +1597,9 @@ async function drawChart(t) {
 
   const frame = (ts) => {
     if (!live || live.dead) return;
-    // frame-rate independent easing toward the real price
-    live.display += (live.target - live.display) * 0.06;
+    const dt = Math.min(ts - (live.lastFrame || ts - 16.7), 120);
+    live.lastFrame = ts;
+    live.display += (live.target - live.display) * easeK(dt); // identical feel at 60Hz and 144Hz
     if (ts - live.lastSample > 120) { live.pts.push([ts, live.display]); live.lastSample = ts; }
     const cutoff = ts - WINDOW;
     while (live.pts.length > 2 && live.pts[1][0] < cutoff) live.pts.shift();
@@ -1544,37 +1614,79 @@ function stopLiveChart() {
   live.dead = true;
   clearInterval(live.poll);
   cancelAnimationFrame(live.raf);
+  wsSend({ watch: null });
   live = null;
+}
+
+// nodes are built ONCE; each frame only touches attributes. rebuilding innerHTML at
+// 60fps was a full DOM parse per frame — that's what made busy pairs stutter.
+function ensureChartNodes(svg) {
+  if (svg._nodes) return svg._nodes;
+  const NS = "http://www.w3.org/2000/svg";
+  const mk = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
+  const fill = mk("path", { "stroke": "none" });
+  const line = mk("path", { fill: "none", "stroke-width": "2.5", "stroke-linejoin": "round", "stroke-linecap": "round" });
+  const dot = mk("circle", { r: "4" });
+  const pulse = mk("animate", { attributeName: "r", values: "3;5;3", dur: "1.6s", repeatCount: "indefinite" });
+  dot.appendChild(pulse);
+  svg.textContent = "";
+  svg.appendChild(fill); svg.appendChild(line); svg.appendChild(dot);
+  svg._nodes = { fill, line, dot };
+  return svg._nodes;
 }
 
 function renderLiveChart(nowTs, WINDOW) {
   const svg = $("chartSvg"); if (!svg || !live) return;
+  const { fill, line, dot } = ensureChartNodes(svg);
   const W = 600, H = 240, P = 10;
   const pts = [...live.pts, [nowTs, live.display]];
-  const vals = pts.map((p) => p[1]);
-  let min = Math.min(...vals), max = Math.max(...vals);
-  const mid = (min + max) / 2 || vals[0] || 1;
-  const span = Math.max(max - min, mid * 0.02, 1e-18);
-  min = mid - span / 2;
-  const X = (t) => P + ((t - (nowTs - WINDOW)) / WINDOW) * (W - 2 * P);
-  const Y = (v) => H - P - ((v - min) / span) * (H - 2 * P);
 
-  // smooth curve: quadratic through midpoints
-  const xy = pts.map((p) => [X(p[0]), Y(p[1])]);
-  let d = `M ${xy[0][0].toFixed(1)} ${xy[0][1].toFixed(1)}`;
+  // rolling min/max without allocating a second array
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < pts.length; i++) { const v = pts[i][1]; if (v < lo) lo = v; if (v > hi) hi = v; }
+  const mid = (lo + hi) / 2 || pts[0][1] || 1;
+  let span = Math.max(hi - lo, mid * 0.02, 1e-18);
+  let min = mid - span / 2;
+  // EASE the scale instead of snapping — a new high on a busy pair used to jolt the whole line
+  if (live.vMin === undefined) { live.vMin = min; live.vSpan = span; }
+  else {
+    const k = live.scaleK || 0.08;
+    live.vMin += (min - live.vMin) * k;
+    live.vSpan += (span - live.vSpan) * k;
+  }
+  min = live.vMin; span = Math.max(live.vSpan, 1e-18);
+
+  const t0 = nowTs - WINDOW, xk = (W - 2 * P) / WINDOW, yk = (H - 2 * P) / span;
+  const X = (t) => P + (t - t0) * xk;
+  const Y = (v) => H - P - (v - min) * yk;
+
+  // decimate: at ~600 samples the extra points are sub-pixel anyway
+  const step = pts.length > 320 ? 2 : 1;
+  const xy = [];
+  for (let i = 0; i < pts.length; i += step) xy.push([X(pts[i][0]), Y(pts[i][1])]);
+  const lastPt = pts[pts.length - 1];
+  xy.push([X(lastPt[0]), Y(lastPt[1])]);
+
+  let d = "M " + xy[0][0].toFixed(1) + " " + xy[0][1].toFixed(1);
   for (let i = 1; i < xy.length - 1; i++) {
     const mx = (xy[i][0] + xy[i + 1][0]) / 2, my = (xy[i][1] + xy[i + 1][1]) / 2;
-    d += ` Q ${xy[i][0].toFixed(1)} ${xy[i][1].toFixed(1)} ${mx.toFixed(1)} ${my.toFixed(1)}`;
+    d += " Q " + xy[i][0].toFixed(1) + " " + xy[i][1].toFixed(1) + " " + mx.toFixed(1) + " " + my.toFixed(1);
   }
   const last = xy[xy.length - 1];
-  d += ` L ${last[0].toFixed(1)} ${last[1].toFixed(1)}`;
+  d += " L " + last[0].toFixed(1) + " " + last[1].toFixed(1);
 
-  const up = vals[vals.length - 1] >= vals[0];
+  const up = lastPt[1] >= pts[0][1];
   const col = up ? "#5FBE12" : "#FF6B6B";
-  svg.innerHTML = `
-    <path d="${d} L ${last[0].toFixed(1)} ${H} L ${xy[0][0].toFixed(1)} ${H} Z" fill="${col}18"/>
-    <path d="${d}" fill="none" stroke="${col}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
-    <circle cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="4" fill="${col}"><animate attributeName="r" values="3;5;3" dur="1.6s" repeatCount="indefinite"/></circle>`;
+  if (svg._col !== col) { // colour only changes on a trend flip, not every frame
+    svg._col = col;
+    fill.setAttribute("fill", col + "18");
+    line.setAttribute("stroke", col);
+    dot.setAttribute("fill", col);
+  }
+  fill.setAttribute("d", d + " L " + last[0].toFixed(1) + " " + H + " L " + xy[0][0].toFixed(1) + " " + H + " Z");
+  line.setAttribute("d", d);
+  dot.setAttribute("cx", last[0].toFixed(1));
+  dot.setAttribute("cy", last[1].toFixed(1));
 }
 
 async function loadHolders(t) {
