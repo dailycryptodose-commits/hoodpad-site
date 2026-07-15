@@ -327,9 +327,11 @@ const PAD_ABI = [
   "function virtualEth() view returns (uint)",
   "function migrationEth() view returns (uint)",
   "function feeWallet() view returns (address)",
+  "function owner() view returns (address)",
   "function buyFeeBps() view returns (uint16)",
   "function migrationEth() view returns (uint)",
   "function feeWallet() view returns (address)",
+  "function owner() view returns (address)",
   "function createToken(string, string, bytes32) payable returns (address)",
   "function tokenInitHash(string, string, address) view returns (bytes32)",
   "function buy(address) payable",
@@ -364,7 +366,8 @@ const V3_ROUTER_ABI = [
   "function unwrapWETH9WithFee(uint256 amountMinimum, address recipient, uint256 feeBips, address feeRecipient) payable",
   "function sweepTokenWithFee(address token, uint256 amountMinimum, address recipient, uint256 feeBips, address feeRecipient) payable",
 ];
-let FEE_WALLET = null; // platform fee recipient, read from pad
+let FEE_WALLET = null; // platform fee recipient, read from pad (may be the vault)
+let PAD_OWNER = null;  // pad owner — stable identity for owner-only features
 // exact-pool introspection: we trade the pool on the page, verified, or nothing
 const V2_PAIR_ABI = [
   "function token0() view returns (address)",
@@ -798,7 +801,7 @@ async function xMidPrice(buying) {
 const TRENCH_SWAPS_ENABLED = false; // OFF until uniswap-API routing lands — robn launchpad trading unaffected
 async function fillXPanel() {
   const el = $("xPanel"); if (!el || !xTok) return;
-  const certMode = FEE_WALLET && wallet && wallet.toLowerCase() === FEE_WALLET.toLowerCase();
+  const certMode = wallet && ((PAD_OWNER && wallet.toLowerCase() === PAD_OWNER.toLowerCase()) || (FEE_WALLET && wallet.toLowerCase() === FEE_WALLET.toLowerCase()));
   if (!TRENCH_SWAPS_ENABLED && !certMode) {
     const uni = `https://app.uniswap.org/swap?outputCurrency=${xTok.token || ""}&chain=robinhood`;
     el.innerHTML = `<div class="secLbl">trade</div>
@@ -1145,6 +1148,7 @@ async function init() {
   try { $("feeShow").textContent = E.formatEther(await pad.creationFee()); } catch (e) {}
   try { MIGRATION_ETH = Number(E.formatEther(await pad.migrationEth())); } catch (e) {}
   try { FEE_WALLET = await pad.feeWallet(); } catch (e) {}
+  try { PAD_OWNER = await pad.owner(); } catch (e) {}
   await loadTokens();
   if (pageToken) {
     document.getElementById("homeView").style.display = "none";
