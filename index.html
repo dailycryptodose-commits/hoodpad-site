@@ -681,7 +681,7 @@ function paintTrenches() {
         <span style="font-weight:600">${(p.name || "?").split("/")[0].trim()}</span>
         ${num(p.fdv ? fmtUsd(p.fdv) : "—")}
         <span style="text-align:right">${pctCell(p.ch.m5)}</span><span style="text-align:right">${pctCell(p.ch.h1)}</span><span style="text-align:right">${pctCell(p.ch.h24)}</span>
-        ${num(fmtUsd(p.vol24 || 0))}${num(fmtUsd(p.liq || 0))}
+        ${num(fmtUsd(p.vol24 || 0))}${(p.liq || 0) < 5000 ? `<span style="font-family:'JetBrains Mono';font-size:12px;text-align:right;color:var(--red)">⚠️ ${fmtUsd(p.liq || 0)}</span>` : num(fmtUsd(p.liq || 0))}
       </a>`).join("")}
     ${pager}`;
   document.querySelectorAll(".tabBtn").forEach((b) => b.classList.toggle("on", b.dataset.tab === trenchTab));
@@ -780,8 +780,12 @@ async function fillXPanel() {
   }
   window._xBal = bal; window._xEthBal = ethBal;
   const buying = xTradeTab === "buy";
+  const turboEmpty = turbo.on && (ethBal === null || ethBal < E.parseEther("0.002"));
+  const dustLiq = !xTok.liq || xTok.liq < 5000;
   el.innerHTML = `
+    ${dustLiq ? `<div class="note" style="border:1px solid var(--red);color:var(--red);margin-bottom:12px">⚠️ TRAP RISK — this pool has ${xTok.liq ? "only " + fmtUsd(xTok.liq) : "unknown"} liquidity. buys pump it instantly, sells return dust, and custom token contracts can block exits. trade like it's a lottery ticket.</div>` : ""}
     <div style="margin-bottom:12px"><button class="btn ghost" style="width:100%;font-size:12px;padding:8px" onclick="${turbo.wallet ? "openTurbo()" : "enableTurbo()"}">${turbo.on ? "⚡ 1-click ON · " + Number(E.formatEther(ethBal || 0n)).toFixed(4) + " ETH · manage" : "⚡ enable 1-click trading"}</button></div>
+    ${turboEmpty ? `<div class="note" style="border:1px solid var(--red);color:var(--red);margin-bottom:12px;cursor:pointer" onclick="openTurbo()">⚡ your trading wallet is empty — tap here to deposit eth (or turn 1-click off to use your main wallet)</div>` : ""}
     <div class="tradeTabs">
       <button class="tradeTab ${buying ? "onBuy" : ""}" onclick="setXTab('buy')">Buy</button>
       <button class="tradeTab ${buying ? "" : "onSell"}" onclick="setXTab('sell')">Sell</button>
@@ -908,6 +912,10 @@ async function doSwapX() {
   const deadline = Math.floor(Date.now() / 1000) + 600;
   const buying = xTradeTab === "buy";
   try {
+    if (useTurbo) {
+      const tb = await turboBal();
+      if (tb < E.parseEther("0.002")) { st.className = "status err"; st.textContent = "⚡ trading wallet is empty — tap the ⚡ strip to deposit"; return; }
+    }
     const amountIn = buying
       ? E.parseEther(v.toString())
       : ((window._xExact && window._xExact.v === $("xAmt").value) ? window._xExact.amt : E.parseEther(v.toString()));
