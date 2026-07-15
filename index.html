@@ -435,13 +435,7 @@ function queueXToast(msg) {
 }
 
 function handleLive(m) {
-  if (m.t === "xtrade") {
-    const amt = m.usd >= 1000 ? "$" + (m.usd / 1000).toFixed(1) + "K" : "$" + m.usd.toFixed(0);
-    const line = `${m.side === "buy" ? "🟢" : "🔴"} ${m.side} ${amt} · ${m.name}`;
-    if (m.usd >= 250) queueXToast(line); // toasts for the bigger ones
-    addFeedItem(`<span class="${m.side === "buy" ? "buyC" : "sellC"}">${m.side === "buy" ? "▲" : "▼"} ${m.name}</span> ${amt}`);
-    return;
-  }
+  if (m.t === "xtrade") return; // ticker bar covers chain activity now
   if (m.t === "created") {
     toast(`🏹 $${m.symbol} just launched!`);
     if (!pageToken && !statsPage && !seasonPage) loadTokens();
@@ -533,7 +527,8 @@ async function renderSeason() {
     </div>`;
 }
 
-let trenchData = null, trenchTab = "trending", trenchSort = { key: null, dir: -1 }, trenchMinLiq = 0, trenchMinVol = 0;
+let trenchData = null, trenchTab = "trending", trenchSort = { key: null, dir: -1 }, trenchMinLiq = 0, trenchMinVol = 0, trenchPg = 1;
+const TRENCH_PER_PAGE = 20;
 async function renderTrenches() {
   document.getElementById("homeView").style.display = "none";
   document.querySelector(".feed").style.display = "none";
@@ -560,15 +555,18 @@ async function loadTrenches() {
   try { trenchData = await (await fetch("/api/trenches")).json(); } catch (e) {}
   paintTrenches();
 }
-function setTrenchLiq(v) { trenchMinLiq = v; paintTrenches(); }
-function setTrenchVol(v) { trenchMinVol = v; paintTrenches(); }
+function setTrenchLiq(v) { trenchMinLiq = v; trenchPg = 1; paintTrenches(); }
+function setTrenchVol(v) { trenchMinVol = v; trenchPg = 1; paintTrenches(); }
+function setTrenchPg(p) { trenchPg = p; paintTrenches(); window.scrollTo({ top: 0, behavior: "smooth" }); }
 function setTrenchSort(key) {
   if (trenchSort.key === key) trenchSort.dir *= -1;
   else trenchSort = { key, dir: -1 };
+  trenchPg = 1;
   paintTrenches();
 }
 function setTrenchTab(t) {
   trenchTab = t;
+  trenchPg = 1;
   document.querySelectorAll(".tabBtn").forEach((b) => b.classList.toggle("on", b.dataset.tab === t));
   paintTrenches();
 }
@@ -589,6 +587,13 @@ function paintTrenches() {
   document.querySelectorAll(".liqChip").forEach((b) => b.classList.toggle("on", Number(b.dataset.v) === trenchMinLiq));
   document.querySelectorAll(".volChip").forEach((b) => b.classList.toggle("on", Number(b.dataset.v) === trenchMinVol));
   if (!list.length) { el.innerHTML = `<div style="color:var(--faint);padding:20px 0;font-size:13px">nothing matches these filters</div>`; return; }
+  const totalPages = Math.max(1, Math.ceil(list.length / TRENCH_PER_PAGE));
+  if (trenchPg > totalPages) trenchPg = totalPages;
+  const pageList = list.slice((trenchPg - 1) * TRENCH_PER_PAGE, trenchPg * TRENCH_PER_PAGE);
+  const pager = totalPages > 1 ? `<div style="display:flex;gap:6px;justify-content:center;padding:14px 0 6px">
+    ${Array.from({ length: totalPages }, (_, i) => i + 1).map((p) =>
+      `<button class="chip ${p === trenchPg ? "on" : ""}" onclick="setTrenchPg(${p})">${p}</button>`).join("")}
+  </div>` : "";
   const COLS = "grid-template-columns:2fr 1fr .8fr .8fr .8fr 1fr 1fr";
   const num = (s) => `<span style="font-family:'JetBrains Mono';font-size:12px;text-align:right">${s}</span>`;
   el.innerHTML = `
@@ -597,13 +602,14 @@ function paintTrenches() {
       ${[["mcap", "mcap"], ["m5", "5m"], ["h1", "1h"], ["h24", "24h"], ["vol", "24h vol"], ["liq", "liquidity"]].map(([k, lbl]) =>
         `<span style="text-align:right;cursor:pointer;user-select:none" onclick="setTrenchSort('${k}')">${lbl}${trenchSort.key === k ? (trenchSort.dir === -1 ? " ↓" : " ↑") : ""}</span>`).join("")}
     </div>
-    ${list.slice(0, 30).map((p) => `
+    ${pageList.map((p) => `
       <a href="/x/${p.pair}" style="text-decoration:none;color:inherit;display:grid;${COLS};gap:8px;align-items:center;padding:11px 0;border-bottom:1px solid var(--line)">
         <span style="font-weight:600">${(p.name || "?").split("/")[0].trim()}</span>
         ${num(p.fdv ? fmtUsd(p.fdv) : "—")}
         <span style="text-align:right">${pctCell(p.ch.m5)}</span><span style="text-align:right">${pctCell(p.ch.h1)}</span><span style="text-align:right">${pctCell(p.ch.h24)}</span>
         ${num(fmtUsd(p.vol24 || 0))}${num(fmtUsd(p.liq || 0))}
-      </a>`).join("")}`;
+      </a>`).join("")}
+    ${pager}`;
   document.querySelectorAll(".tabBtn").forEach((b) => b.classList.toggle("on", b.dataset.tab === trenchTab));
 }
 
@@ -916,6 +922,7 @@ async function init() {
     renderTokenPage();
     setInterval(async () => { await loadTokens(); renderTokenPage(true); }, 20000);
   } else if (trenchPage) {
+    loadFeed();
     renderTrenches();
   } else if (xPair) {
     renderExternalToken(xPair);
@@ -1426,28 +1433,27 @@ async function watchNewTokens() {
   }, 4000);
 }
 
-function addFeedItem(html) {
-  const f = $("feed"), inner = $("feedInner");
-  if (!f || !inner) return;
-  f.style.display = "flex";
-  const s = document.createElement("span");
-  s.innerHTML = html;
-  inner.insertBefore(s, inner.firstChild);
-  while (inner.children.length > 18) inner.removeChild(inner.lastChild);
-}
-
+const STABLES = /^(USDG|USDC|USDT|DAI|WETH|ETH)\b/i;
 async function loadFeed() {
   try {
-    const latest = await reader.getBlockNumber();
-    const from = Math.max(0, latest - 8000);
-    const buys = await pad.queryFilter(pad.filters.Buy(), from, latest);
-    const sells = await pad.queryFilter(pad.filters.Sell(), from, latest);
-    const evs = [...buys.map((e) => ({ b: e.blockNumber, h: `<span class="buyC">▲ ${short(e.args.buyer)}</span> bought ${Number(E.formatEther(e.args.ethIn)).toFixed(4)} ETH` })),
-                 ...sells.map((e) => ({ b: e.blockNumber, h: `<span class="sellC">▼ ${short(e.args.seller)}</span> sold for ${Number(E.formatEther(e.args.ethOut)).toFixed(4)} ETH` }))]
-      .sort((a, b) => b.b - a.b).slice(0, 12);
-    if (evs.length) { $("feed").style.display = "flex"; $("feedInner").innerHTML = evs.map((e) => `<span>${e.h}</span>`).join(""); }
+    if (!trenchData) trenchData = await (await fetch("/api/trenches")).json();
+    const pool = [...(trenchData.trending || []), ...(trenchData.top || [])];
+    const seen = new Set();
+    const picks = pool.filter((p) => {
+      const nm = (p.name || "").split("/")[0].trim();
+      if (STABLES.test(nm) || seen.has(nm)) return false;
+      seen.add(nm); return true;
+    }).slice(0, 15);
+    if (!picks.length) return;
+    $("feed").style.display = "flex";
+    $("feedInner").innerHTML = picks.map((p) => {
+      const ch = (p.ch && p.ch.h24) || 0;
+      const col = ch >= 0 ? "var(--green)" : "var(--red)";
+      return `<a href="/x/${p.pair}" style="text-decoration:none;color:inherit">🔥 <b>${p.name.split("/")[0].trim()}</b> <span style="color:${col}">${ch >= 0 ? "+" : ""}${ch.toFixed(1)}%</span></a>`;
+    }).join("");
   } catch (e) {}
 }
+setInterval(loadFeed, 60000);
 
 // ---- wallet ----
 async function reconnectSilently() {

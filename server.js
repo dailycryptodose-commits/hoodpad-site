@@ -157,19 +157,26 @@ async function watchChainTrades() {
 }
 setInterval(watchChainTrades, 30000);
 
-// keep the pool list warm server-side so the trade watcher always has targets
+// keep the pool list warm server-side: 5 pages of top pools + trending + 2 pages of new
 async function warmTrenches() {
   try {
-    if (trenchCache.data && Date.now() - trenchCache.ts < 25_000) return;
     const get = (u) => fetch(u, { headers: { accept: "application/json" } }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-    const [tr, top, nw] = await Promise.all([get(GT + "/trending_pools"), get(GT + "/pools?sort=h24_volume_usd_desc&page=1"), get(GT + "/new_pools?page=1")]);
     const clean = (j) => (j && j.data ? j.data.map(mapPool).filter(Boolean) : []);
-    const data = { ts: Date.now(), trending: clean(tr), top: clean(top), fresh: clean(nw) };
+    const [tr, t1, t2, t3, t4, t5, n1, n2] = await Promise.all([
+      get(GT + "/trending_pools"),
+      ...[1, 2, 3, 4, 5].map((p) => get(GT + "/pools?sort=h24_volume_usd_desc&page=" + p)),
+      get(GT + "/new_pools?page=1"), get(GT + "/new_pools?page=2"),
+    ]);
+    const seen = new Set();
+    const top = [...clean(t1), ...clean(t2), ...clean(t3), ...clean(t4), ...clean(t5)].filter((p) => !seen.has(p.pair) && seen.add(p.pair));
+    const seen2 = new Set();
+    const fresh = [...clean(n1), ...clean(n2)].filter((p) => !seen2.has(p.pair) && seen2.add(p.pair));
+    const data = { ts: Date.now(), trending: clean(tr), top, fresh };
     if (data.trending.length || data.top.length || data.fresh.length) trenchCache = { ts: Date.now(), data };
   } catch (e) {}
 }
 warmTrenches();
-setInterval(warmTrenches, 30000);
+setInterval(warmTrenches, 60000);
 
 const port = process.env.PORT || 3000;
 server.listen(port, () => console.log("hoodpad site running on " + port));
@@ -423,20 +430,8 @@ function mapPool(d) {
     };
   } catch (e) { return null; }
 }
-app.get("/api/trenches", async (req, res) => {
-  try {
-    if (trenchCache.data && Date.now() - trenchCache.ts < 30_000) return res.json(trenchCache.data);
-    const get = (u) => fetch(u, { headers: { accept: "application/json" } }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-    const [tr, top, nw] = await Promise.all([
-      get(GT + "/trending_pools"),
-      get(GT + "/pools?sort=h24_volume_usd_desc&page=1"),
-      get(GT + "/new_pools?page=1"),
-    ]);
-    const clean = (j) => (j && j.data ? j.data.map(mapPool).filter(Boolean) : []);
-    const data = { ts: Date.now(), trending: clean(tr), top: clean(top), fresh: clean(nw) };
-    if (data.trending.length || data.top.length || data.fresh.length) trenchCache = { ts: Date.now(), data };
-    res.json(data);
-  } catch (e) { res.json({ ts: Date.now(), trending: [], top: [], fresh: [], err: true }); }
+app.get("/api/trenches", (req, res) => {
+  res.json(trenchCache.data || { ts: Date.now(), trending: [], top: [], fresh: [] });
 });
 
 // season 1 points: 1000 pts per ETH traded + 500 per token launched
