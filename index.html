@@ -190,6 +190,7 @@
   .slidePct{font-family:'JetBrains Mono';font-size:12px;font-weight:700;color:var(--green);min-width:44px;text-align:right}
   .slideUsd{font-family:'JetBrains Mono';font-size:11.5px;color:var(--dim);min-width:60px;text-align:right}
   .chips{display:flex;gap:6px;margin:-6px 0 12px}
+  .chip.on{background:var(--green);color:#0A1403;border-color:transparent}
   .chip{background:#0C1107;border:1px solid var(--line2);color:var(--dim);font-family:'JetBrains Mono';font-size:11px;padding:6px 10px;border-radius:9px}
   .chip:hover{border-color:#3E5C22;color:var(--mint)}
 </style>
@@ -500,7 +501,7 @@ async function renderSeason() {
     </div>`;
 }
 
-let trenchData = null, trenchTab = "trending";
+let trenchData = null, trenchTab = "trending", trenchSort = { key: null, dir: -1 }, trenchMinLiq = 0, trenchMinVol = 0;
 async function renderTrenches() {
   document.getElementById("homeView").style.display = "none";
   document.querySelector(".feed").style.display = "none";
@@ -513,12 +514,25 @@ async function renderTrenches() {
       <button class="tabBtn" data-tab="top" onclick="setTrenchTab('top')">📊 Top volume</button>
       <button class="tabBtn" data-tab="fresh" onclick="setTrenchTab('fresh')">✨ New</button>
     </div>
+    <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+      <span style="font-size:10.5px;color:var(--faint);letter-spacing:1px;text-transform:uppercase">min liq</span>
+      ${[0, 50000, 250000, 1000000].map((v) => `<button class="chip liqChip" data-v="${v}" onclick="setTrenchLiq(${v})">${v ? "$" + (v >= 1e6 ? v / 1e6 + "M" : v / 1e3 + "K") : "all"}</button>`).join("")}
+      <span style="font-size:10.5px;color:var(--faint);letter-spacing:1px;text-transform:uppercase;margin-left:10px">min vol</span>
+      ${[0, 100000, 1000000, 5000000].map((v) => `<button class="chip volChip" data-v="${v}" onclick="setTrenchVol(${v})">${v ? "$" + (v >= 1e6 ? v / 1e6 + "M" : v / 1e3 + "K") : "all"}</button>`).join("")}
+    </div>
     <div class="panel" style="padding:8px 14px"><div id="trenchList"><div style="color:var(--faint);padding:20px 0;font-size:13px">loading the trenches…</div></div></div></div>`;
   await loadTrenches();
   setInterval(loadTrenches, 30000);
 }
 async function loadTrenches() {
   try { trenchData = await (await fetch("/api/trenches")).json(); } catch (e) {}
+  paintTrenches();
+}
+function setTrenchLiq(v) { trenchMinLiq = v; paintTrenches(); }
+function setTrenchVol(v) { trenchMinVol = v; paintTrenches(); }
+function setTrenchSort(key) {
+  if (trenchSort.key === key) trenchSort.dir *= -1;
+  else trenchSort = { key, dir: -1 };
   paintTrenches();
 }
 function setTrenchTab(t) {
@@ -533,13 +547,23 @@ function pctCell(v) {
 }
 function paintTrenches() {
   const el = $("trenchList"); if (!el || !trenchData) return;
-  const list = trenchData[trenchTab] || [];
-  if (!list.length) { el.innerHTML = `<div style="color:var(--faint);padding:20px 0;font-size:13px">nothing here yet — the trenches are quiet</div>`; return; }
+  let list = [...(trenchData[trenchTab] || [])];
+  if (trenchMinLiq) list = list.filter((p) => (p.liq || 0) >= trenchMinLiq);
+  if (trenchMinVol) list = list.filter((p) => (p.vol24 || 0) >= trenchMinVol);
+  if (trenchSort.key) {
+    const g = (p) => trenchSort.key === "mcap" ? (p.fdv || 0) : trenchSort.key === "vol" ? (p.vol24 || 0) : trenchSort.key === "liq" ? (p.liq || 0) : ((p.ch && p.ch[trenchSort.key]) || 0);
+    list.sort((a, b) => (g(b) - g(a)) * (trenchSort.dir === -1 ? 1 : -1));
+  }
+  document.querySelectorAll(".liqChip").forEach((b) => b.classList.toggle("on", Number(b.dataset.v) === trenchMinLiq));
+  document.querySelectorAll(".volChip").forEach((b) => b.classList.toggle("on", Number(b.dataset.v) === trenchMinVol));
+  if (!list.length) { el.innerHTML = `<div style="color:var(--faint);padding:20px 0;font-size:13px">nothing matches these filters</div>`; return; }
   const COLS = "grid-template-columns:2fr 1fr .8fr .8fr .8fr 1fr 1fr";
   const num = (s) => `<span style="font-family:'JetBrains Mono';font-size:12px;text-align:right">${s}</span>`;
   el.innerHTML = `
     <div style="display:grid;${COLS};gap:8px;padding:10px 0;border-bottom:1px solid var(--line);color:var(--faint);font-size:10.5px;text-transform:uppercase;letter-spacing:1px">
-      <span>token</span><span style="text-align:right">mcap</span><span style="text-align:right">5m</span><span style="text-align:right">1h</span><span style="text-align:right">24h</span><span style="text-align:right">24h vol</span><span style="text-align:right">liquidity</span>
+      <span>token</span>
+      ${[["mcap", "mcap"], ["m5", "5m"], ["h1", "1h"], ["h24", "24h"], ["vol", "24h vol"], ["liq", "liquidity"]].map(([k, lbl]) =>
+        `<span style="text-align:right;cursor:pointer;user-select:none" onclick="setTrenchSort('${k}')">${lbl}${trenchSort.key === k ? (trenchSort.dir === -1 ? " ↓" : " ↑") : ""}</span>`).join("")}
     </div>
     ${list.slice(0, 30).map((p) => `
       <a href="/x/${p.pair}" style="text-decoration:none;color:inherit;display:grid;${COLS};gap:8px;align-items:center;padding:11px 0;border-bottom:1px solid var(--line)">
