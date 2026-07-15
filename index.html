@@ -629,6 +629,7 @@ function cleanPools(arr) {
   for (const p of arr) {
     const nm = (p.name || "").split("/")[0].trim();
     if (STABLES.test(nm)) continue;                     // WETH/USDG/stables aren't memecoins
+    if ((p.liq || 0) < 10000) continue;                 // under $10k liquidity: not listed, not tradeable, not on robn.fun
     if (p.fdv && (p.fdv > 5e10 || p.fdv < 1)) p.fdv = null;  // glitched data
     if (p.ch) for (const k of ["m5", "h1", "h6", "h24"]) { if (Math.abs(p.ch[k]) > 10000) p.ch[k] = null; }
     const key = (p.token || nm).toLowerCase();
@@ -743,22 +744,26 @@ async function probeAndFillX(pair) {
   } catch (e) {}
   // 2) v4: discover the pool key by probing standard fee tiers (native eth pools, no hooks)
   const quoter = new E.Contract(V4_QUOTER, V4_QUOTER_ABI, reader);
+  let bestV4 = null, bestV4Out = 0n;
   for (const [fee, ts] of V4_FEE_TIERS) {
     try {
       const key = { currency0: ZERO, currency1: xTok.token, fee, tickSpacing: ts, hooks: ZERO };
       const r = await quoter.quoteExactInputSingle.staticCall({ poolKey: key, zeroForOne: true, exactAmount: E.parseEther("0.0001"), hookData: "0x" });
-      if (r && r[0] > 0n) { xMode = "v4"; xV4Key = key; break; }
+      if (r && r[0] > bestV4Out) { bestV4Out = r[0]; bestV4 = key; } // deepest pool = best output
     } catch (e) {}
   }
+  if (bestV4) { xMode = "v4"; xV4Key = bestV4; }
   // 3) v3: probe standard fee tiers via QuoterV2
   if (!xMode) {
     const q3 = new E.Contract(V3_QUOTER, V3_QUOTER_ABI, reader);
+    let bestFee = null, bestOut = 0n;
     for (const fee of V3_FEES) {
       try {
         const r = await q3.quoteExactInputSingle.staticCall({ tokenIn: WETH_ADDR, tokenOut: xTok.token, amountIn: E.parseEther("0.0001"), fee, sqrtPriceLimitX96: 0 });
-        if (r && r[0] > 0n) { xMode = "v3"; xV3Fee = fee; break; }
+        if (r && r[0] > bestOut) { bestOut = r[0]; bestFee = fee; }
       } catch (e) {}
     }
+    if (bestFee !== null) { xMode = "v3"; xV3Fee = bestFee; }
   }
   if (!xMode) xMode = "none";
   xV2 = xMode !== "none";
@@ -780,10 +785,16 @@ async function fillXPanel() {
   }
   window._xBal = bal; window._xEthBal = ethBal;
   const buying = xTradeTab === "buy";
+  if (!xTok.liq || xTok.liq < 10000) {
+    el.innerHTML = `<div class="secLbl">trade</div>
+      <div class="note" style="border:1px solid var(--red);color:var(--red);margin-bottom:12px">⚠️ TRAP RISK — this pool has ${xTok.liq ? "only " + fmtUsd(xTok.liq) : "unknown"} liquidity. buys pump it instantly, sells return dust, and custom contracts can block exits. robn.fun won't route trades into it.</div>
+      <a class="btn ghost" style="text-decoration:none;display:block;text-align:center" href="https://dexscreener.com/robinhood/${xTok.pair}" target="_blank" rel="noopener">view on dexscreener ↗</a>`;
+    return;
+  }
   const turboEmpty = turbo.on && (ethBal === null || ethBal < E.parseEther("0.002"));
-  const dustLiq = !xTok.liq || xTok.liq < 5000;
+  const dustLiq = xTok.liq < 25000;
   el.innerHTML = `
-    ${dustLiq ? `<div class="note" style="border:1px solid var(--red);color:var(--red);margin-bottom:12px">⚠️ TRAP RISK — this pool has ${xTok.liq ? "only " + fmtUsd(xTok.liq) : "unknown"} liquidity. buys pump it instantly, sells return dust, and custom token contracts can block exits. trade like it's a lottery ticket.</div>` : ""}
+    ${dustLiq ? `<div class="note" style="border:1px solid var(--orange, #e8a13a);color:var(--orange, #e8a13a);margin-bottom:12px">⚠️ thin pool — ${fmtUsd(xTok.liq)} liquidity. size down; big orders move the price against you.</div>` : ""}
     <div style="margin-bottom:12px"><button class="btn ghost" style="width:100%;font-size:12px;padding:8px" onclick="${turbo.wallet ? "openTurbo()" : "enableTurbo()"}">${turbo.on ? "⚡ 1-click ON · " + Number(E.formatEther(ethBal || 0n)).toFixed(4) + " ETH · manage" : "⚡ enable 1-click trading"}</button></div>
     ${turboEmpty ? `<div class="note" style="border:1px solid var(--red);color:var(--red);margin-bottom:12px;cursor:pointer" onclick="openTurbo()">⚡ your trading wallet is empty — tap here to deposit eth (or turn 1-click off to use your main wallet)</div>` : ""}
     <div class="tradeTabs">
