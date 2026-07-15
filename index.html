@@ -55,6 +55,9 @@
   .wrap{max-width:1340px;margin:0 auto}
   .hero{padding:26px 18px 8px}
   .eyebrow{font-family:'JetBrains Mono';font-size:11px;letter-spacing:2px;color:var(--green);text-transform:uppercase;margin-bottom:8px}
+  @media(min-width:1000px){.heroGrid{grid-template-columns:1fr 1fr!important}}
+  .card{animation:popIn .4s ease backwards}
+  .card:nth-child(2){animation-delay:.05s}.card:nth-child(3){animation-delay:.1s}.card:nth-child(4){animation-delay:.15s}.card:nth-child(5){animation-delay:.2s}.card:nth-child(6){animation-delay:.25s}
   .eyebrow .dot{display:inline-block;width:7px;height:7px;border-radius:99px;background:var(--green);margin-right:6px;animation:pulse 1.6s infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
   .heroCard{background:linear-gradient(160deg,#121A0B,#0E1508 60%);border:1px solid var(--line2);border-radius:22px;padding:22px 20px;display:flex;flex-wrap:wrap;gap:18px;align-items:center;cursor:pointer}
@@ -1383,6 +1386,13 @@ function render() {
     h.style.display = "block";
     const R = 62, C = 2 * Math.PI * R, frac = Math.min(1, top.prog / 100);
     h.innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr;gap:14px" class="heroGrid">
+      <div>
+        <div class="eyebrow"><span class="dot"></span>Hood chain right now</div>
+        <div class="heroCard" id="heroSpot" style="cursor:pointer;min-height:180px"><div style="color:var(--faint);font-size:13px">tuning into the trenches…</div></div>
+        <div id="chainStats" style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap"></div>
+      </div>
+      <div>
       <div class="eyebrow"><span class="dot"></span>Bonding now</div>
       <div class="heroCard" onclick="location.href='/t/${top.addr}'">
         <div class="heroLeft">
@@ -1409,8 +1419,61 @@ function render() {
             <div class="miniBar"><div style="width:${Math.min(100, top.prog)}%"></div></div>
           </div>
         </div>
+      </div>
+      </div>
       </div>`;
+    startSpotlight();
   } else h.style.display = "none";
+}
+
+// rotating spotlight of the hottest chain tokens + live chain stats
+let spotIdx = 0, spotTimer = null;
+async function startSpotlight() {
+  if (!trenchData) { try { trenchData = await (await fetch("/api/trenches")).json(); } catch (e) {} }
+  paintSpotlight();
+  paintChainStats();
+  if (!spotTimer) spotTimer = setInterval(() => { spotIdx++; paintSpotlight(); }, 5000);
+}
+function spotPicks() {
+  if (!trenchData) return [];
+  const seen = new Set();
+  return [...(trenchData.trending || []), ...(trenchData.top || [])].filter((p) => {
+    const nm = (p.name || "").split("/")[0].trim();
+    if (STABLES.test(nm) || seen.has(nm) || !(p.vol24 > 0)) return false;
+    seen.add(nm); return true;
+  }).slice(0, 6);
+}
+function paintSpotlight() {
+  const el = $("heroSpot"); if (!el) return;
+  const picks = spotPicks(); if (!picks.length) return;
+  const p = picks[spotIdx % picks.length];
+  const nm = p.name.split("/")[0].trim();
+  const ch = (p.ch && p.ch.h24) || 0;
+  el.onclick = () => location.href = "/x/" + p.pair;
+  el.style.animation = "none"; void el.offsetWidth; el.style.animation = "popIn .45s ease";
+  el.innerHTML = `
+    <div class="heroLeft">
+      <div class="heroName">🔥 ${nm}</div>
+      <div class="heroTick">trending on hood chain · tap to trade on robn.fun</div>
+      <div class="heroStats">
+        <div><span class="lbl">fdv</span><span class="val">${p.fdv ? fmtUsd(p.fdv) : "—"}</span></div>
+        <div><span class="lbl">24h</span><span class="val" style="color:${ch >= 0 ? "var(--green)" : "var(--red)"}">${ch >= 0 ? "+" : ""}${ch.toFixed(1)}%</span></div>
+        <div><span class="lbl">24h vol</span><span class="val">${fmtUsd(p.vol24 || 0)}</span></div>
+        <div><span class="lbl">liquidity</span><span class="val">${fmtUsd(p.liq || 0)}</span></div>
+      </div>
+    </div>
+    <div style="display:flex;gap:4px;align-items:flex-end;padding-bottom:6px">${spotPicks().map((_, i) => `<span style="width:${i === spotIdx % picks.length ? 18 : 6}px;height:6px;border-radius:9px;background:${i === spotIdx % picks.length ? "var(--green)" : "var(--line2)"};transition:all .3s"></span>`).join("")}</div>`;
+}
+function paintChainStats() {
+  const el = $("chainStats"); if (!el || !trenchData) return;
+  const all = spotPicks().length ? [...(trenchData.top || [])] : [];
+  const vol = all.reduce((s, p) => s + (p.vol24 || 0), 0);
+  const gainer = [...all].filter((p) => !STABLES.test(p.name)).sort((a, b) => ((b.ch && b.ch.h24) || 0) - ((a.ch && a.ch.h24) || 0))[0];
+  const box = (lbl, val) => `<div class="statBox" style="flex:1;min-width:120px"><span class="lbl">${lbl}</span><span class="val">${val}</span></div>`;
+  el.innerHTML =
+    box("chain 24h volume", fmtUsd(vol)) +
+    box("tokens tracked", all.length + (trenchData.fresh || []).length) +
+    (gainer ? box("top gainer", `${gainer.name.split("/")[0].trim()} <span style='color:var(--green)'>+${((gainer.ch && gainer.ch.h24) || 0).toFixed(0)}%</span>`) : "");
 }
 
 let lastSeenBlock = 0;
