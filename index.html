@@ -164,11 +164,23 @@
   .back:hover{color:var(--mint)}
   .tpGrid{display:grid;grid-template-columns:1fr;gap:14px}
   @media(min-width:1000px){
-    .tpGrid{grid-template-columns:195px minmax(0,1fr) 400px;gap:16px;grid-template-areas:"rail chart trade"}
+    .tpGrid{grid-template-columns:215px minmax(0,1fr) 400px;gap:16px;grid-template-areas:"rail chart trade";align-items:stretch}
     .chartPanel{grid-area:chart}
     .rightCol{align-self:start}
     .statRail{grid-area:rail;align-self:start}
+    /* /x/ pair pages: every column ends on the same line */
+    .xFixed .statRail{height:var(--xh);align-self:stretch}
+    .xFixed .statRail .statBox{flex:1;display:flex;flex-direction:column;justify-content:center}
+    .xFixed .chartPanel{height:var(--xh);display:flex;flex-direction:column}
+    .xFixed .rightCol{height:var(--xh);display:flex;flex-direction:column;gap:14px;align-self:stretch}
+    .xFixed .rightCol .robnCard{margin-top:auto}
   }
+  .tpGrid{--xh:660px}
+  .xfeed{border-top:1px solid var(--line);margin-top:8px;padding-top:6px;height:128px;overflow:hidden;display:flex;flex-direction:column;gap:2px}
+  .xfRow{display:flex;justify-content:space-between;align-items:center;font-family:'JetBrains Mono';font-size:11.5px;padding:3px 6px;border-radius:6px;animation:fadeUp .25s ease}
+  .xfRow.b{background:rgba(95,190,18,.10);color:#8FD64A}
+  .xfRow.s{background:rgba(255,107,107,.10);color:#FF8F8F}
+  .xfNone{color:var(--faint);font-size:11.5px;padding:6px}
   .statRail{display:flex;flex-direction:column;gap:10px}
   .statBox{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
   .statBox .lbl{display:block;font-size:10.5px;color:var(--faint);margin-bottom:3px}
@@ -509,7 +521,13 @@ function handleLive(m) {
       live.target = m.price;
       if (!live.display) { live.display = m.price; live.pts = live.pts.map((p) => [p[0], m.price]); }
       const ce = $("chartEmpty"); if (ce) ce.style.display = "none";
-      if (xTok) { xTok.priceUsd = m.price; const h = $("xFdv"); if (h && xTok.supply) h.textContent = fmtUsd(m.price * xTok.supply); }
+      if (xTok && xTok.priceUsd > 0) { // keep mcap live off the same tick
+        const mc = $("xMcap"), base = xTok.mcap || xTok.fdv;
+        if (mc && base) mc.textContent = fmtUsd(base * (m.price / xTok.priceUsd));
+        xTok.mcap = base ? base * (m.price / xTok.priceUsd) : base;
+        xTok.priceUsd = m.price;
+      }
+      pushTrades(m.trades);
     }
     return;
   }
@@ -793,8 +811,9 @@ async function renderExternalToken(pair) {
       </div>
       <div class="mcapBig"><div class="lbl">fdv</div><div class="val">${p && p.fdv ? fmtUsd(p.fdv) : "—"}</div></div>
     </div>
-    <div class="tpGrid">
+    <div class="tpGrid xFixed">
       <div class="statRail">
+        <div class="statBox"><span class="lbl">market cap</span><span class="val" id="xMcap">${p && (p.mcap || p.fdv) ? fmtUsd(p.mcap || p.fdv) : "—"}</span></div>
         <div class="statBox"><span class="lbl">24h volume</span><span class="val">${p && p.vol24 ? fmtUsd(p.vol24) : "—"}</span></div>
         <div class="statBox"><span class="lbl">5m change</span><span class="val">${xPct(ch.m5)}</span></div>
         <div class="statBox"><span class="lbl">1h change</span><span class="val">${xPct(ch.h1)}</span></div>
@@ -804,12 +823,13 @@ async function renderExternalToken(pair) {
         ${p && p.onchain ? `<div class="note" style="font-size:11px">read live from the pool contract — this pair isn't indexed by our data provider yet, so volume and % history are unavailable.</div>` : ""}
       </div>
       <div class="panel chartPanel" style="padding:10px">
-        <div style="display:flex;gap:6px;margin-bottom:8px">
+        <div style="display:flex;gap:6px;margin-bottom:8px;flex:none">
           <button class="chip" id="xTabLive" onclick="xChartMode('live')">📈 live</button>
           <button class="chip" id="xTabCandles" onclick="xChartMode('candles')">🕯 candles</button>
         </div>
-        <div id="xChartLive"><div class="chartWrap" style="height:620px"><svg id="chartSvg" viewBox="0 0 600 240" preserveAspectRatio="none" style="height:100%"></svg><div class="chartEmpty" id="chartEmpty" style="display:none">waiting for the first price tick…</div></div></div>
-        <div id="xChartCandles" style="display:none"></div>
+        <div id="xChartLive" style="flex:1;min-height:0"><div class="chartWrap" style="height:100%"><svg id="chartSvg" preserveAspectRatio="none" style="height:100%"></svg><div class="chartEmpty" id="chartEmpty" style="display:none">waiting for the first trade…</div></div></div>
+        <div id="xChartCandles" style="display:none;flex:1;min-height:0"></div>
+        <div class="xfeed" id="xFeed" style="flex:none"><div class="xfNone">watching the pool for live trades…</div></div>
       </div>
       <div class="rightCol" style="grid-area:trade">
         <div class="panel" id="xPanel"><div class="quote">checking swap support…</div></div>
@@ -1516,6 +1536,31 @@ async function refreshCurrentToken() {
 
 function openEditMetaPage() { $("tradeModal").classList.add("open"); openEditMeta(); }
 
+// live buy/sell feed under the chart — sizes in dollars, straight from Swap events
+let xFeedRows = [];
+function pushTrades(list) {
+  if (!list || !list.length) return;
+  const now = Date.now();
+  for (const t of list) xFeedRows.unshift({ ...t, ts: now });
+  xFeedRows = xFeedRows.slice(0, 12);
+  renderFeed();
+}
+function renderFeed() {
+  const el = $("xFeed"); if (!el) return;
+  if (!xFeedRows.length) { el.innerHTML = `<div class="xfNone">watching the pool for live trades…</div>`; return; }
+  el.innerHTML = xFeedRows.slice(0, 7).map((t) => {
+    const secs = Math.max(0, Math.round((Date.now() - t.ts) / 1000));
+    const ago = secs < 60 ? secs + "s" : Math.round(secs / 60) + "m";
+    return `<div class="xfRow ${t.buy ? "b" : "s"}">
+      <span>${t.buy ? "▲ BUY" : "▼ SELL"}</span>
+      <span style="font-weight:700">${fmtUsd(t.usd)}</span>
+      <span style="opacity:.65">${t.eth.toFixed(4)} ETH</span>
+      <a class="explorer" style="opacity:.65" href="https://robinhoodchain.blockscout.com/tx/${t.tx}" target="_blank" rel="noopener">${ago} ↗</a>
+    </div>`;
+  }).join("");
+}
+setInterval(() => { if (xFeedRows.length && $("xFeed")) renderFeed(); }, 5000); // keep the "ago" honest
+
 // /x/ chart: smooth live line by default, dexscreener candles on demand
 let xChartCur = "live";
 function xChartMode(m) {
@@ -1545,14 +1590,15 @@ async function drawXChart(t) {
   const WINDOW = 75_000;
   const now = performance.now();
   const seed = t.priceUsd || 0;
-  live = { addr: t.pair, pts: [[now - WINDOW, seed]], target: seed, display: seed, raf: null, poll: null, lastSample: 0, dead: false, usd: true };
+  live = { addr: t.pair, pts: [[now - WINDOW, seed]], target: seed, display: seed, raf: null, poll: null, lastSample: 0, dead: false, usd: true, tau: 900, scaleK: 0.05 };
+  xFeedRows = [];
   const ce = $("chartEmpty"); if (ce) ce.style.display = seed ? "none" : "flex";
   wsSend({ watch: t.pair });
   const frame = (ts) => {
     if (!live || live.dead) return;
     const dt = Math.min(ts - (live.lastFrame || ts - 16.7), 120); // clamp: rAF pauses on tab switch
     live.lastFrame = ts;
-    live.display += (live.target - live.display) * easeK(dt);
+    live.display += (live.target - live.display) * easeK(dt, live.tau);
     if (ts - live.lastSample > 120) { live.pts.push([ts, live.display]); live.lastSample = ts; }
     const cutoff = ts - WINDOW;
     while (live.pts.length > 2 && live.pts[1][0] < cutoff) live.pts.shift();
@@ -1565,7 +1611,7 @@ async function drawXChart(t) {
 // 0.06/frame felt right ONLY at 60Hz (tau ~= -16.7/ln(0.94) = 270ms). on a 120/144Hz
 // screen it converged 2-2.4x faster, then sat flat = the stutter. express it as time.
 const EASE_TAU = 270; // ms — ~99% converged at ~1.24s, just as the next 1.2s tick lands
-function easeK(dt) { return 1 - Math.exp(-dt / EASE_TAU); }
+function easeK(dt, tau) { return 1 - Math.exp(-dt / (tau || EASE_TAU)); }
 
 let live = null; // 60fps time-scrolling chart
 
@@ -1599,7 +1645,7 @@ async function drawChart(t) {
     if (!live || live.dead) return;
     const dt = Math.min(ts - (live.lastFrame || ts - 16.7), 120);
     live.lastFrame = ts;
-    live.display += (live.target - live.display) * easeK(dt); // identical feel at 60Hz and 144Hz
+    live.display += (live.target - live.display) * easeK(dt, live.tau); // identical feel at 60Hz and 144Hz
     if (ts - live.lastSample > 120) { live.pts.push([ts, live.display]); live.lastSample = ts; }
     const cutoff = ts - WINDOW;
     while (live.pts.length > 2 && live.pts[1][0] < cutoff) live.pts.shift();
@@ -1638,7 +1684,9 @@ function ensureChartNodes(svg) {
 function renderLiveChart(nowTs, WINDOW) {
   const svg = $("chartSvg"); if (!svg || !live) return;
   const { fill, line, dot } = ensureChartNodes(svg);
-  const W = 600, H = 240, P = 10;
+  // 1 svg unit = 1 css pixel, so nothing is stretched and the line keeps its true shape
+  const W = Math.max(svg.clientWidth || 600, 60), H = Math.max(svg.clientHeight || 240, 60), P = 10;
+  if (svg._w !== W || svg._h !== H) { svg.setAttribute("viewBox", "0 0 " + W + " " + H); svg._w = W; svg._h = H; }
   const pts = [...live.pts, [nowTs, live.display]];
 
   // rolling min/max without allocating a second array

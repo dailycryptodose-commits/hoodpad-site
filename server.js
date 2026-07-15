@@ -332,6 +332,49 @@ async function readPoolPrice(pair) {
   } catch (e) { return null; }
 }
 
+// Swap event signatures — v2 and v3 differ, and poolMeta already knows which we have
+const SWAP_V2_TOPIC = ethers.id("Swap(address,uint256,uint256,uint256,uint256,address)");
+const SWAP_V3_TOPIC = ethers.id("Swap(address,address,int256,int256,uint160,int128,int24)");
+const v2Iface = new ethers.Interface(["event Swap(address indexed sender, uint amount0In, uint amount1In, uint amount0Out, uint amount1Out, address indexed to)"]);
+const v3Iface = new ethers.Interface(["event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, int128 liquidity, int24 tick)"]);
+const poolLogBlock = new Map(); // pair -> last block scanned
+
+async function poolTrades(pair, meta, usd) {
+  try {
+    const latest = await provider.getBlockNumber();
+    let from = poolLogBlock.get(pair);
+    if (from === undefined) { poolLogBlock.set(pair, latest); return []; } // first tick: start from now
+    if (latest <= from) return [];
+    from = Math.max(from + 1, latest - 400); // never scan a huge range after a restart
+    const logs = await provider.getLogs({
+      address: pair, fromBlock: from, toBlock: latest,
+      topics: [meta.v3 ? SWAP_V3_TOPIC : SWAP_V2_TOPIC],
+    });
+    poolLogBlock.set(pair, latest);
+    const out = [];
+    for (const lg of logs) {
+      try {
+        let ethIn = 0n, ethOut = 0n;
+        if (meta.v3) {
+          const e = v3Iface.parseLog(lg);
+          const wethAmt = meta.wethIs0 ? e.args.amount0 : e.args.amount1; // positive = into the pool
+          if (wethAmt > 0n) ethIn = wethAmt; else ethOut = -wethAmt;
+        } else {
+          const e = v2Iface.parseLog(lg);
+          ethIn = meta.wethIs0 ? e.args.amount0In : e.args.amount1In;
+          ethOut = meta.wethIs0 ? e.args.amount0Out : e.args.amount1Out;
+        }
+        const buy = ethIn > 0n;                       // eth into the pool = someone bought the token
+        const amt = buy ? ethIn : ethOut;
+        const eth = Number(ethers.formatEther(amt));
+        if (!eth) continue;
+        out.push({ buy, usd: eth * usd, eth, tx: lg.transactionHash });
+      } catch (e) {}
+    }
+    return out;
+  } catch (e) { return []; }
+}
+
 async function poolTick() {
   const pairs = [...poolWatch.keys()];
   if (!pairs.length) return;
@@ -339,7 +382,9 @@ async function poolTick() {
     const price = await readPoolPrice(pair);
     if (price === null) return;
     poolLast.set(pair, price);
-    const msg = JSON.stringify({ type: "xprice", pair, price });
+    const meta = await getPoolMeta(pair);
+    const trades = meta ? await poolTrades(pair, meta, ethUsdCache.v || 0) : [];
+    const msg = JSON.stringify({ type: "xprice", pair, price, trades });
     for (const c of wss.clients) {
       if (c.readyState === 1 && c._watching === pair) { try { c.send(msg); } catch (e) {} }
     }
@@ -361,7 +406,7 @@ function unwatchPool(ws) {
   const p = ws._watching;
   if (!p) return;
   const n = (poolWatch.get(p) || 1) - 1;
-  if (n <= 0) poolWatch.delete(p); else poolWatch.set(p, n);
+  if (n <= 0) { poolWatch.delete(p); poolLogBlock.delete(p); } else poolWatch.set(p, n);
   ws._watching = null;
 }
 
@@ -849,6 +894,7 @@ function mapPool(d) {
       vol24: Number(a.volume_usd?.h24),
       liq: Number(a.reserve_in_usd),
       fdv: Number(a.fdv_usd),
+      mcap: Number(a.market_cap_usd) || Number(a.fdv_usd) || null,
       created: a.pool_created_at,
       dex: d.relationships?.dex?.data?.id || "",
       token: (d.relationships?.base_token?.data?.id || "").split("_").pop() || null,
