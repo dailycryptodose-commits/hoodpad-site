@@ -365,6 +365,19 @@ const V3_ROUTER_ABI = [
   "function sweepTokenWithFee(address token, uint256 amountMinimum, address recipient, uint256 feeBips, address feeRecipient) payable",
 ];
 let FEE_WALLET = null; // platform fee recipient, read from pad
+// exact-pool introspection: we trade the pool on the page, verified, or nothing
+const V2_PAIR_ABI = [
+  "function token0() view returns (address)",
+  "function token1() view returns (address)",
+  "function getReserves() view returns (uint112 reserve0, uint112 reserve1, uint32)",
+];
+const V3_POOL_ABI = [
+  "function token0() view returns (address)",
+  "function token1() view returns (address)",
+  "function fee() view returns (uint24)",
+  "function slot0() view returns (uint160 sqrtPriceX96, int24, uint16, uint16, uint16, uint8, bool)",
+];
+const IMPACT_HARD_CAP = 0.10; // trades that would move the pool >10% are blocked
 const WETH_ADDR = "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73";
 const ROUTER_ABI = [
   "function getAmountsOut(uint amountIn, address[] path) view returns (uint[] amounts)",
@@ -732,68 +745,60 @@ function xPct(v) {
   return `<span style="color:${c}">${v >= 0 ? "+" : ""}${Number(v).toFixed(1)}%</span>`;
 }
 
-let xMode = null, xV4Key = null, xV3Fee = null, xPriceOk = true; // "v2" | "v4" | "v3" | "none"
-const PROBE_IN = E.parseEther("0.0001");
+let xMode = null, xV3Fee = null, xPoolC = null, xWethIs0 = null, xPriceOk = true;
+// EXACT-POOL ENGINE: introspect the pool shown on the page and trade THAT pool — or refuse.
 async function probeAndFillX(pair) {
-  xMode = null; xV4Key = null; xV3Fee = null; xV2 = null; xPriceOk = true;
+  xMode = null; xV3Fee = null; xPoolC = null; xWethIs0 = null; xPriceOk = true; xV2 = null;
   if (!xTok || !xTok.token) { $("xPanel").innerHTML = `<div class="quote">pair data unavailable — <a class="explorer" href="https://dexscreener.com/robinhood/${pair}" target="_blank" rel="noopener">trade on dexscreener ↗</a></div>`; return; }
-  // quote EVERY protocol; the deepest pool pays the most and wins — decoy pools mathematically can't
-  const candidates = [];
+  const W = WETH_ADDR.toLowerCase(), T = xTok.token.toLowerCase();
+  // try v3 pool interface first (fee() only exists on v3)
   try {
-    const router = new E.Contract(UNIROUTER, ROUTER_ABI, reader);
-    const out = await router.getAmountsOut(PROBE_IN, [WETH_ADDR, xTok.token]);
-    if (out && out[1] > 0n) candidates.push({ mode: "v2", out: out[1] });
-  } catch (e) {}
-  try {
-    const quoter = new E.Contract(V4_QUOTER, V4_QUOTER_ABI, reader);
-    for (const [fee, ts] of V4_FEE_TIERS) {
-      try {
-        const key = { currency0: ZERO, currency1: xTok.token, fee, tickSpacing: ts, hooks: ZERO };
-        const r = await quoter.quoteExactInputSingle.staticCall({ poolKey: key, zeroForOne: true, exactAmount: PROBE_IN, hookData: "0x" });
-        if (r && r[0] > 0n) candidates.push({ mode: "v4", out: r[0], key });
-      } catch (e) {}
+    const p3 = new E.Contract(pair, V3_POOL_ABI, reader);
+    const [t0, t1, fee] = await Promise.all([p3.token0(), p3.token1(), p3.fee()]);
+    const a = t0.toLowerCase(), b = t1.toLowerCase();
+    if ((a === W && b === T) || (a === T && b === W)) {
+      xMode = "v3"; xV3Fee = Number(fee); xPoolC = p3; xWethIs0 = a === W; xV2 = true; fillXPanel(); return;
     }
+    xMode = "nonEth"; xV2 = false; fillXPanel(); return; // real pool, but paired against VIRTUAL/USDG/etc → phase 2
   } catch (e) {}
+  // then v2 pair interface
   try {
-    const q3 = new E.Contract(V3_QUOTER, V3_QUOTER_ABI, reader);
-    for (const fee of V3_FEES) {
-      try {
-        const r = await q3.quoteExactInputSingle.staticCall({ tokenIn: WETH_ADDR, tokenOut: xTok.token, amountIn: PROBE_IN, fee, sqrtPriceLimitX96: 0 });
-        if (r && r[0] > 0n) candidates.push({ mode: "v3", out: r[0], fee });
-      } catch (e) {}
+    const p2 = new E.Contract(pair, V2_PAIR_ABI, reader);
+    const [t0, t1] = await Promise.all([p2.token0(), p2.token1()]);
+    const a = t0.toLowerCase(), b = t1.toLowerCase();
+    if ((a === W && b === T) || (a === T && b === W)) {
+      xMode = "v2"; xPoolC = p2; xWethIs0 = a === W; xV2 = true; fillXPanel(); return;
     }
+    xMode = "nonEth"; xV2 = false; fillXPanel(); return;
   } catch (e) {}
-
-  if (!candidates.length) { xMode = "none"; xV2 = false; fillXPanel(); return; }
-  candidates.sort((a, b) => (b.out > a.out ? 1 : -1));
-  const best = candidates[0];
-  xMode = best.mode;
-  if (best.mode === "v4") xV4Key = best.key;
-  if (best.mode === "v3") xV3Fee = best.fee;
-  xV2 = true;
-
-  // FAIL-CLOSED price gate: the route's price must match the market price, or no trade.
-  // covers every routing blind spot (multi-hop pools, usdg pairs, weth-erc20 v4) on every token.
-  xPriceOk = false;
-  try {
-    let dec = 18;
-    try { dec = Number(await new E.Contract(xTok.token, ["function decimals() view returns (uint8)"], reader).decimals()); } catch (e) {}
-    if (ethUsd && xTok.priceUsd > 0 && dec > 0 && dec <= 36) {
-      const tokensOut = Number(best.out) / 10 ** dec;
-      if (tokensOut > 0) {
-        const implied = (0.0001 * ethUsd) / tokensOut;
-        const ratio = implied / xTok.priceUsd;
-        if (ratio <= 1.3 && ratio >= 0.7) xPriceOk = true; // within ±30% of market = real pool
-      }
-    }
-  } catch (e) {}
+  // not introspectable (v4 poolId, exotic) → phase 2, link out
+  xMode = "none"; xV2 = false;
   fillXPanel();
+}
+
+// mid-price (token per eth in raw units) straight from the displayed pool — decimals cancel in ratios
+async function xMidPrice(buying) {
+  if (xMode === "v2") {
+    const r = await xPoolC.getReserves();
+    const rw = xWethIs0 ? r[0] : r[1], rt = xWethIs0 ? r[1] : r[0];
+    if (rw === 0n || rt === 0n) return null;
+    return buying ? Number(rt) / Number(rw) : Number(rw) / Number(rt);
+  }
+  if (xMode === "v3") {
+    const s = await xPoolC.slot0();
+    const sqrtP = Number(s[0]) / 2 ** 96;
+    const p1per0 = sqrtP * sqrtP;              // token1 per token0
+    const tokenPerEth = xWethIs0 ? p1per0 : 1 / p1per0;
+    return buying ? tokenPerEth : 1 / tokenPerEth;
+  }
+  return null;
 }
 
 const TRENCH_SWAPS_ENABLED = false; // OFF until uniswap-API routing lands — robn launchpad trading unaffected
 async function fillXPanel() {
   const el = $("xPanel"); if (!el || !xTok) return;
-  if (!TRENCH_SWAPS_ENABLED) {
+  const certMode = FEE_WALLET && wallet && wallet.toLowerCase() === FEE_WALLET.toLowerCase();
+  if (!TRENCH_SWAPS_ENABLED && !certMode) {
     const uni = `https://app.uniswap.org/swap?outputCurrency=${xTok.token || ""}&chain=robinhood`;
     el.innerHTML = `<div class="secLbl">trade</div>
       <div class="note" style="margin-bottom:12px">in-site swaps are getting a routing upgrade (uniswap's own engine — multi-hop, every pool). back soon. until then, one tap:</div>
@@ -801,9 +806,12 @@ async function fillXPanel() {
       <a class="btn ghost" style="text-decoration:none;display:block;text-align:center;margin-top:8px;font-size:12px" href="https://dexscreener.com/robinhood/${xTok.pair}" target="_blank" rel="noopener">view on dexscreener ↗</a>`;
     return;
   }
-  if (xMode === null) { el.innerHTML = `<div class="quote">checking swap support…</div>`; return; }
-  if (xMode === "none") {
-    el.innerHTML = `<div class="secLbl">trade</div><div class="quote" style="margin-bottom:12px">this pool uses custom hooks we can't route yet</div><a class="btn" style="text-decoration:none;display:block;text-align:center" href="https://dexscreener.com/robinhood/${xTok.pair}" target="_blank" rel="noopener">trade ↗</a>`;
+  if (xMode === null) { el.innerHTML = `<div class="quote">verifying this pool on-chain…</div>`; return; }
+  if (xMode === "nonEth" || xMode === "none") {
+    const uni = `https://app.uniswap.org/swap?outputCurrency=${xTok.token || ""}&chain=robinhood`;
+    el.innerHTML = `<div class="secLbl">trade</div>
+      <div class="quote" style="margin-bottom:12px">${xMode === "nonEth" ? "this token's pool isn't paired against ETH — multi-hop routing is coming; until then trade it on uniswap" : "this pool type isn't supported in-site yet (v4/exotic) — trade it on uniswap"}</div>
+      <a class="btn" style="text-decoration:none;display:block;text-align:center" href="${uni}" target="_blank" rel="noopener">trade on Uniswap ↗</a>`;
     return;
   }
   let bal = null, ethBal = null;
@@ -827,8 +835,10 @@ async function fillXPanel() {
     return;
   }
   const turboEmpty = turbo.on && (ethBal === null || ethBal < E.parseEther("0.002"));
+  const certBadge = (!TRENCH_SWAPS_ENABLED && certMode) ? `<div class="note" style="border:1px solid var(--green);color:var(--green);margin-bottom:12px">🔬 CERTIFICATION MODE — swaps visible to the owner wallet only. verify with $2 per route, then flip TRENCH_SWAPS_ENABLED to open for everyone.</div>` : "";
   const dustLiq = xTok.liq < 25000;
   el.innerHTML = `
+    ${certBadge}
     ${dustLiq ? `<div class="note" style="border:1px solid var(--orange, #e8a13a);color:var(--orange, #e8a13a);margin-bottom:12px">⚠️ thin pool — ${fmtUsd(xTok.liq)} liquidity. size down; big orders move the price against you.</div>` : ""}
     <div style="margin-bottom:12px"><button class="btn ghost" style="width:100%;font-size:12px;padding:8px" onclick="${turbo.wallet ? "openTurbo()" : "enableTurbo()"}">${turbo.on ? "⚡ 1-click ON · " + Number(E.formatEther(ethBal || 0n)).toFixed(4) + " ETH · manage" : "⚡ enable 1-click trading"}</button></div>
     ${turboEmpty ? `<div class="note" style="border:1px solid var(--red);color:var(--red);margin-bottom:12px;cursor:pointer" onclick="openTurbo()">⚡ your trading wallet is empty — tap here to deposit eth (or turn 1-click off to use your main wallet)</div>` : ""}
@@ -847,7 +857,7 @@ async function fillXPanel() {
         : [25, 50, 75, 100].map((pc) => `<button class="chip" style="flex:1" onclick="setXPct(${pc})">${pc}%</button>`).join("")}
     </div>
     <div class="quote" id="xQuote"></div>
-    <button class="btn ${buying ? "" : "ctaSell"}" style="width:100%;padding:13px" onclick="doSwapX()">${buying ? "Buy" : "Sell"}</button>
+    <button id="xGoBtn" class="btn ${buying ? "" : "ctaSell"}" style="width:100%;padding:13px" onclick="doSwapX()">${buying ? "Buy" : "Sell"}</button>
     ${who ? "" : `<div class="quote" style="margin-top:10px">connect wallet or enable ⚡ to trade</div>`}
     <div class="status" id="xStatus"></div>
     <div class="note">routes through uniswap ${xMode} on robinhood chain · 5% max slippage</div>`;
@@ -884,11 +894,6 @@ async function xQuoteOut(amtIn, buying) {
     const out = await router.getAmountsOut(amtIn, buying ? [WETH_ADDR, xTok.token] : [xTok.token, WETH_ADDR]);
     return out[1];
   }
-  if (xMode === "v4") {
-    const quoter = new E.Contract(V4_QUOTER, V4_QUOTER_ABI, reader);
-    const r = await quoter.quoteExactInputSingle.staticCall({ poolKey: xV4Key, zeroForOne: buying, exactAmount: amtIn, hookData: "0x" });
-    return r[0];
-  }
   if (xMode === "v3") {
     const q3 = new E.Contract(V3_QUOTER, V3_QUOTER_ABI, reader);
     const r = await q3.quoteExactInputSingle.staticCall({
@@ -899,21 +904,45 @@ async function xQuoteOut(amtIn, buying) {
   }
   throw new Error("no route");
 }
+
+// impact = how far your execution price sits below the pool's mid price (fees included, so tiny trades read ~pool fee)
+async function xImpact(amtIn, out, buying) {
+  try {
+    const mid = await xMidPrice(buying);
+    if (!mid) return null;
+    const exec = Number(out) / Number(amtIn);
+    const impact = 1 - exec / mid;
+    return isFinite(impact) ? Math.max(0, impact) : null;
+  } catch (e) { return null; }
+}
+let xLastImpact = null;
+function paintImpact(q, base, impact) {
+  xLastImpact = impact;
+  const btn = $("xGoBtn");
+  if (impact === null) { q.innerHTML = base; if (btn) btn.disabled = false; return; }
+  const pct = (impact * 100).toFixed(1);
+  const col = impact > IMPACT_HARD_CAP ? "var(--red)" : impact > 0.03 ? "#e8a13a" : "var(--faint)";
+  q.innerHTML = `${base} · <span style="color:${col};font-weight:700">impact -${pct}%</span>${impact > IMPACT_HARD_CAP ? ` <span style="color:var(--red)">— blocked, size down</span>` : ""}`;
+  if (btn) btn.disabled = impact > IMPACT_HARD_CAP;
+}
 async function quoteX() {
   const q = $("xQuote"); if (!q) return;
-  const v = parseFloat($("xAmt").value); if (!v || v <= 0) { q.textContent = ""; return; }
+  const v = parseFloat($("xAmt").value); if (!v || v <= 0) { q.textContent = ""; xLastImpact = null; return; }
   try {
     if (xTradeTab === "buy") {
-      const out = await xQuoteOut(E.parseEther(v.toString()), true);
-      q.textContent = "≈ " + Number(E.formatEther(out)).toLocaleString(undefined, { maximumFractionDigits: 0 }) + " tokens" + (ethUsd ? " · $" + (v * ethUsd).toFixed(2) : "");
+      const amtIn = E.parseEther(v.toString());
+      const out = await xQuoteOut(amtIn, true);
+      const base = "≈ " + Number(E.formatEther(out)).toLocaleString(undefined, { maximumFractionDigits: 0 }) + " tokens" + (ethUsd ? " · $" + (v * ethUsd).toFixed(2) : "");
+      paintImpact(q, base, await xImpact(amtIn, out, true));
     } else {
       const amt = (window._xExact && window._xExact.v === $("xAmt").value) ? window._xExact.amt : E.parseEther(v.toString());
       const out = await xQuoteOut(amt, false);
       const eth = Number(E.formatEther(out));
-      q.textContent = "≈ " + eth.toFixed(5) + " ETH" + (ethUsd ? " ($" + (eth * ethUsd).toFixed(2) + ")" : "");
+      const base = "≈ " + eth.toFixed(5) + " ETH" + (ethUsd ? " ($" + (eth * ethUsd).toFixed(2) + ")" : "");
       const u = $("xSlideUsd"); if (u && ethUsd) u.textContent = "$" + (eth * ethUsd).toFixed(2);
+      paintImpact(q, base, await xImpact(amt, out, false));
     }
-  } catch (e) { q.textContent = ""; }
+  } catch (e) { q.textContent = ""; xLastImpact = null; }
 }
 function encodeV4Swap(buying, amountIn, minOut) {
   const abi = E.AbiCoder.defaultAbiCoder();
@@ -966,6 +995,12 @@ async function doSwapX() {
       ? E.parseEther(v.toString())
       : ((window._xExact && window._xExact.v === $("xAmt").value) ? window._xExact.amt : E.parseEther(v.toString()));
     const quoted = await xQuoteOut(amountIn, buying);
+    const impact = await xImpact(amountIn, quoted, buying);
+    if (impact !== null && impact > IMPACT_HARD_CAP) {
+      st.className = "status err";
+      st.textContent = `blocked — this trade would move the pool -${(impact * 100).toFixed(1)}%. size down.`;
+      return;
+    }
     const minOut = (quoted * 95n) / 100n;
 
     if (xMode === "v2") {
@@ -1013,13 +1048,6 @@ async function doSwapX() {
         const tx = await r3.multicall([swapData, unwrapData]);
         await tx.wait();
       }
-    } else if (xMode === "v4") {
-      if (!buying) await ensurePermit2(s, to, amountIn, st, useTurbo);
-      const { commands, inputs } = encodeV4Swap(buying, amountIn, minOut);
-      const ur = new E.Contract(V4_ROUTER, UR_ABI, s);
-      st.textContent = useTurbo ? (buying ? "⚡ buying…" : "⚡ selling…") : "confirm in wallet…";
-      const tx = await ur.execute(commands, inputs, deadline, { value: buying ? amountIn : 0n });
-      await tx.wait();
     } else { throw new Error("no route for this pair"); }
 
     st.className = "status ok"; st.textContent = (useTurbo ? "⚡" : "✅") + (buying ? " bought" : " sold");
