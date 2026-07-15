@@ -380,6 +380,7 @@ function mapPool(d) {
       fdv: Number(a.fdv_usd),
       created: a.pool_created_at,
       dex: d.relationships?.dex?.data?.id || "",
+      token: (d.relationships?.base_token?.data?.id || "").split("_").pop() || null,
     };
   } catch (e) { return null; }
 }

@@ -328,6 +328,13 @@ const PAD_ABI = [
   "event Buy(address indexed token, address indexed buyer, uint ethIn, uint tokensOut)",
   "event Sell(address indexed token, address indexed seller, uint tokensIn, uint ethOut, uint taxEth)"
 ];
+const UNIROUTER = "0x89e5db8b5aa49aa85ac63f691524311aeb649eba";
+const WETH_ADDR = "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73";
+const ROUTER_ABI = [
+  "function getAmountsOut(uint amountIn, address[] path) view returns (uint[] amounts)",
+  "function swapExactETHForTokensSupportingFeeOnTransferTokens(uint amountOutMin, address[] path, address to, uint deadline) payable",
+  "function swapExactTokensForETHSupportingFeeOnTransferTokens(uint amountIn, uint amountOutMin, address[] path, address to, uint deadline)",
+];
 const TOK_ABI = [
   "function name() view returns (string)",
   "function symbol() view returns (string)",
@@ -505,6 +512,7 @@ function paintTrenches() {
   document.querySelectorAll(".tabBtn").forEach((b) => b.classList.toggle("on", b.dataset.tab === trenchTab));
 }
 
+let xTok = null, xTradeTab = "buy", xV2 = null; // null=unknown, true/false after probe
 async function renderExternalToken(pair) {
   document.getElementById("homeView").style.display = "none";
   document.querySelector(".feed").style.display = "none";
@@ -512,22 +520,141 @@ async function renderExternalToken(pair) {
   if (!trenchData) { try { trenchData = await (await fetch("/api/trenches")).json(); } catch (e) {} }
   const all = trenchData ? [...(trenchData.trending || []), ...(trenchData.top || []), ...(trenchData.fresh || [])] : [];
   const p = all.find((x) => x.pair.toLowerCase() === pair.toLowerCase());
+  xTok = p || null;
   const name = p ? p.name.split("/")[0].trim() : short(pair);
-  $("statsView").innerHTML = `<div style="max-width:1200px;margin:0 auto"><a class="back" href="/trenches">← trenches</a>
+  const ch = (p && p.ch) || {};
+  $("statsView").innerHTML = `<div style="max-width:1500px;margin:0 auto"><a class="back" href="/trenches">← trenches</a>
     <div class="panel tpHeadCard">
       <div>
         <div class="tpName">${name} <span class="taxBadge low" style="font-size:10px">ON HOOD CHAIN</span></div>
-        <div class="metaRow" style="margin-top:6px">${p ? `24h vol <b>${fmtUsd(p.vol24 || 0)}</b> · liquidity <b>${fmtUsd(p.liq || 0)}</b> · 24h ${p.ch.h24 >= 0 ? "+" : ""}${(p.ch.h24 || 0).toFixed(1)}%` : "live pair on robinhood chain"}</div>
+        <div class="metaRow" style="margin-top:6px">${p && p.token ? `<span class="caChip" style="margin:0;padding:5px 10px" onclick="navigator.clipboard.writeText('${p.token}');toast('address copied')">CA ${short(p.token)} ⧉</span>` : "live pair on robinhood chain"}</div>
       </div>
       <div class="mcapBig"><div class="lbl">fdv</div><div class="val">${p && p.fdv ? fmtUsd(p.fdv) : "—"}</div></div>
     </div>
-    <div class="panel" style="padding:10px">
-      <iframe src="https://dexscreener.com/robinhood/${pair}?embed=1&theme=${document.body.dataset.theme === "light" ? "light" : "dark"}&info=0" style="width:100%;height:640px;border:0;border-radius:12px" title="chart"></iframe>
-    </div>
-    <div style="margin-top:12px;display:flex;gap:10px">
-      <a class="btn" style="text-decoration:none" href="https://dexscreener.com/robinhood/${pair}" target="_blank" rel="noopener">trade ↗</a>
-      <a class="btn ghost" style="text-decoration:none" href="/">launch your own on robn.fun 🏹</a>
+    <div class="tpGrid">
+      <div class="statRail">
+        <div class="statBox"><span class="lbl">24h volume</span><span class="val">${p ? fmtUsd(p.vol24 || 0) : "—"}</span></div>
+        <div class="statBox"><span class="lbl">5m change</span><span class="val">${xPct(ch.m5)}</span></div>
+        <div class="statBox"><span class="lbl">1h change</span><span class="val">${xPct(ch.h1)}</span></div>
+        <div class="statBox"><span class="lbl">6h change</span><span class="val">${xPct(ch.h6)}</span></div>
+        <div class="statBox"><span class="lbl">24h change</span><span class="val">${xPct(ch.h24)}</span></div>
+        <div class="statBox"><span class="lbl">liquidity</span><span class="val">${p ? fmtUsd(p.liq || 0) : "—"}</span></div>
+      </div>
+      <div class="panel chartPanel" style="padding:10px">
+        <iframe src="https://dexscreener.com/robinhood/${pair}?embed=1&theme=${document.body.dataset.theme === "light" ? "light" : "dark"}&info=0" style="width:100%;height:620px;border:0;border-radius:12px" title="chart"></iframe>
+      </div>
+      <div class="rightCol" style="grid-area:trade">
+        <div class="panel" id="xPanel"><div class="quote">checking swap support…</div></div>
+        <div class="panel"><div class="secLbl">🏹 robn.fun</div><div class="metaRow">launch your own token — earn 50% of every trade fee, forever.</div><a class="btn ghost" style="text-decoration:none;margin-top:10px;display:inline-block;font-size:12px" href="/">+ launch a token</a></div>
+      </div>
     </div></div>`;
+  probeAndFillX(pair);
+}
+function xPct(v) {
+  if (v === null || v === undefined || isNaN(v)) return "—";
+  const c = v >= 0 ? "var(--green)" : "var(--red)";
+  return `<span style="color:${c}">${v >= 0 ? "+" : ""}${Number(v).toFixed(1)}%</span>`;
+}
+
+async function probeAndFillX(pair) {
+  xV2 = null;
+  if (!xTok || !xTok.token) { $("xPanel").innerHTML = `<div class="quote">pair data unavailable — <a class="explorer" href="https://dexscreener.com/robinhood/${pair}" target="_blank" rel="noopener">trade on dexscreener ↗</a></div>`; return; }
+  try {
+    const router = new E.Contract(UNIROUTER, ROUTER_ABI, reader);
+    await router.getAmountsOut(E.parseEther("0.001"), [WETH_ADDR, xTok.token]);
+    xV2 = true;
+  } catch (e) { xV2 = false; }
+  fillXPanel();
+}
+
+async function fillXPanel() {
+  const el = $("xPanel"); if (!el || !xTok) return;
+  if (!xV2) {
+    el.innerHTML = `<div class="secLbl">trade</div><div class="quote" style="margin-bottom:12px">this pair trades on a router we don't support in-site yet</div><a class="btn" style="text-decoration:none;display:block;text-align:center" href="https://dexscreener.com/robinhood/${xTok.pair}" target="_blank" rel="noopener">trade ↗</a>`;
+    return;
+  }
+  let bal = null, ethBal = null;
+  const who = (turbo.on && turbo.wallet) ? turbo.wallet.address : wallet;
+  if (who) {
+    try { bal = await new E.Contract(xTok.token, TOK_ABI, reader).balanceOf(who); } catch (e) {}
+    try { ethBal = await reader.getBalance(who); } catch (e) {}
+  }
+  window._xBal = bal; window._xEthBal = ethBal;
+  const buying = xTradeTab === "buy";
+  el.innerHTML = `
+    <div style="margin-bottom:12px"><button class="btn ghost" style="width:100%;font-size:12px;padding:8px" onclick="${turbo.wallet ? "openTurbo()" : "enableTurbo()"}">${turbo.on ? "⚡ 1-click ON · " + Number(E.formatEther(ethBal || 0n)).toFixed(4) + " ETH · manage" : "⚡ enable 1-click trading"}</button></div>
+    <div class="tradeTabs">
+      <button class="tradeTab ${buying ? "onBuy" : ""}" onclick="setXTab('buy')">Buy</button>
+      <button class="tradeTab ${buying ? "" : "onSell"}" onclick="setXTab('sell')">Sell</button>
+    </div>
+    <div class="field"><input id="xAmt" placeholder="${buying ? "0.01 (ETH)" : "0 (tokens)"}" inputmode="decimal" oninput="quoteX()"></div>
+    <div class="chips">
+      ${buying
+        ? [0.01, 0.05, 0.1, 0.25, 0.5].map((v) => `<button class="chip" style="flex:1" onclick="$('xAmt').value=${v};quoteX()">${v}</button>`).join("")
+        : [25, 50, 75, 100].map((pc) => `<button class="chip" style="flex:1" onclick="setXPct(${pc})">${pc}%</button>`).join("")}
+    </div>
+    <div class="quote" id="xQuote"></div>
+    <button class="btn ${buying ? "" : "ctaSell"}" style="width:100%;padding:13px" onclick="doSwapX()">${buying ? "Buy" : "Sell"}</button>
+    ${who ? "" : `<div class="quote" style="margin-top:10px">connect wallet or enable ⚡ to trade</div>`}
+    <div class="status" id="xStatus"></div>
+    <div class="note">swaps route through uniswap on robinhood chain · 5% max slippage</div>`;
+}
+function setXTab(t) { xTradeTab = t; fillXPanel(); }
+function setXPct(p) {
+  if (!window._xBal) return;
+  const amt = (window._xBal * BigInt(p)) / 100n;
+  $("xAmt").value = E.formatEther(amt);
+  window._xExact = { v: $("xAmt").value, amt };
+  quoteX();
+}
+async function quoteX() {
+  const q = $("xQuote"); if (!q) return;
+  const v = parseFloat($("xAmt").value); if (!v || v <= 0) { q.textContent = ""; return; }
+  try {
+    const router = new E.Contract(UNIROUTER, ROUTER_ABI, reader);
+    if (xTradeTab === "buy") {
+      const out = await router.getAmountsOut(E.parseEther(v.toString()), [WETH_ADDR, xTok.token]);
+      q.textContent = "≈ " + Number(E.formatEther(out[1])).toLocaleString(undefined, { maximumFractionDigits: 0 }) + " tokens" + (ethUsd ? " · $" + (v * ethUsd).toFixed(2) : "");
+    } else {
+      const amt = (window._xExact && window._xExact.v === $("xAmt").value) ? window._xExact.amt : E.parseEther(v.toString());
+      const out = await router.getAmountsOut(amt, [xTok.token, WETH_ADDR]);
+      const eth = Number(E.formatEther(out[1]));
+      q.textContent = "≈ " + eth.toFixed(5) + " ETH" + (ethUsd ? " ($" + (eth * ethUsd).toFixed(2) + ")" : "");
+    }
+  } catch (e) { q.textContent = ""; }
+}
+async function doSwapX() {
+  const useTurbo = turbo.on && turbo.wallet;
+  if (!useTurbo && !(await needWallet())) return;
+  const v = parseFloat($("xAmt").value); if (!v) return;
+  const st = $("xStatus"); st.className = "status";
+  const s = tradeSigner();
+  const to = useTurbo ? turbo.wallet.address : wallet;
+  const deadline = Math.floor(Date.now() / 1000) + 600;
+  try {
+    const router = new E.Contract(UNIROUTER, ROUTER_ABI, s);
+    if (xTradeTab === "buy") {
+      const amountIn = E.parseEther(v.toString());
+      const out = await router.getAmountsOut(amountIn, [WETH_ADDR, xTok.token]);
+      const minOut = (out[1] * 95n) / 100n;
+      st.textContent = useTurbo ? "⚡ buying…" : "confirm in wallet…";
+      const tx = await router.swapExactETHForTokensSupportingFeeOnTransferTokens(minOut, [WETH_ADDR, xTok.token], to, deadline, { value: amountIn });
+      await tx.wait();
+      st.className = "status ok"; st.textContent = (useTurbo ? "⚡" : "✅") + " bought";
+    } else {
+      const amt = (window._xExact && window._xExact.v === $("xAmt").value) ? window._xExact.amt : E.parseEther(v.toString());
+      const tok = new E.Contract(xTok.token, TOK_ABI, s);
+      const allow = await tok.allowance(to, UNIROUTER);
+      if (allow < amt) { st.textContent = useTurbo ? "⚡ approving…" : "approve — confirm in wallet…"; const a = await tok.approve(UNIROUTER, E.MaxUint256); await a.wait(); }
+      const out = await router.getAmountsOut(amt, [xTok.token, WETH_ADDR]);
+      const minOut = (out[1] * 95n) / 100n;
+      st.textContent = useTurbo ? "⚡ selling…" : "confirm sell in wallet…";
+      const tx = await router.swapExactTokensForETHSupportingFeeOnTransferTokens(amt, minOut, [xTok.token, WETH_ADDR], to, deadline);
+      await tx.wait();
+      st.className = "status ok"; st.textContent = (useTurbo ? "⚡" : "✅") + " sold";
+    }
+    fillXPanel();
+  } catch (e) { st.className = "status err"; st.textContent = e.shortMessage || e.message; }
 }
 
 async function renderStats() {
