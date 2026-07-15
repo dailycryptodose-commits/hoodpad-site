@@ -1317,7 +1317,11 @@ async function init() {
   loadFeed(); // trending ticker on every page
   // deferred: nothing below blocks first paint
   setTimeout(() => { reconnectSilently(); connectLive(); startPulse(); }, 0);
-  setTimeout(() => { loadTokens(); if (!ethUsd) ethPrice(); }, 1500); // verify cache against chain in the background
+  setTimeout(async () => { // verify against the chain in the background
+    await loadTokens();
+    if (pageToken && !currentToken) renderTokenPage(); // first paint missed it — draw it now
+    if (!ethUsd) ethPrice();
+  }, 1500);
   try { const r = new URLSearchParams(location.search).get("ref"); if (r && /^0x[0-9a-fA-F]{40}$/.test(r)) localStorage.setItem("robn-ref", r); } catch (e) {}
   setInterval(ethPrice, 60000);
 }
@@ -1873,7 +1877,10 @@ async function loadTokens(skipVerify) {
     const c = await (await fetch("/tokens")).json();
     let chainCount = null;
     if (!skipVerify) { try { chainCount = Number(await pad.tokenCount()); } catch (e) {} }
-    if (c && c.ts && c.tokens && (chainCount === null || c.tokens.length >= chainCount)) {
+    // c.tokens can be an empty array right after a server restart (cache still cold).
+    // [] is truthy, so the old check believed it and rendered "no tokens" / "token not
+    // found". never trust an empty cache — fall through to reading the chain directly.
+    if (c && c.ts && c.tokens && c.tokens.length && (chainCount === null || c.tokens.length >= chainCount)) {
       tokens = c.tokens.map((t) => {
         const priceEth = Number(E.formatEther(BigInt(t.price)));
         return { addr: t.addr, i: t.i, name: t.name, symbol: t.symbol, migrated: t.migrated,
