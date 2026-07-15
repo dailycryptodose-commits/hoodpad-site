@@ -790,8 +790,17 @@ async function probeAndFillX(pair) {
   fillXPanel();
 }
 
+const TRENCH_SWAPS_ENABLED = false; // OFF until uniswap-API routing lands — robn launchpad trading unaffected
 async function fillXPanel() {
   const el = $("xPanel"); if (!el || !xTok) return;
+  if (!TRENCH_SWAPS_ENABLED) {
+    const uni = `https://app.uniswap.org/swap?outputCurrency=${xTok.token || ""}&chain=robinhood`;
+    el.innerHTML = `<div class="secLbl">trade</div>
+      <div class="note" style="margin-bottom:12px">in-site swaps are getting a routing upgrade (uniswap's own engine — multi-hop, every pool). back soon. until then, one tap:</div>
+      <a class="btn" style="text-decoration:none;display:block;text-align:center" href="${uni}" target="_blank" rel="noopener">trade on Uniswap ↗</a>
+      <a class="btn ghost" style="text-decoration:none;display:block;text-align:center;margin-top:8px;font-size:12px" href="https://dexscreener.com/robinhood/${xTok.pair}" target="_blank" rel="noopener">view on dexscreener ↗</a>`;
+    return;
+  }
   if (xMode === null) { el.innerHTML = `<div class="quote">checking swap support…</div>`; return; }
   if (xMode === "none") {
     el.innerHTML = `<div class="secLbl">trade</div><div class="quote" style="margin-bottom:12px">this pool uses custom hooks we can't route yet</div><a class="btn" style="text-decoration:none;display:block;text-align:center" href="https://dexscreener.com/robinhood/${xTok.pair}" target="_blank" rel="noopener">trade ↗</a>`;
