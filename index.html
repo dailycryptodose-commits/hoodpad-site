@@ -732,41 +732,55 @@ function xPct(v) {
   return `<span style="color:${c}">${v >= 0 ? "+" : ""}${Number(v).toFixed(1)}%</span>`;
 }
 
-let xMode = null, xV4Key = null, xV3Fee = null; // "v2" | "v4" | "v3" | "none"
+let xMode = null, xV4Key = null, xV3Fee = null, xPriceOk = true; // "v2" | "v4" | "v3" | "none"
+const PROBE_IN = E.parseEther("0.0001");
 async function probeAndFillX(pair) {
-  xMode = null; xV4Key = null; xV2 = null;
+  xMode = null; xV4Key = null; xV3Fee = null; xV2 = null; xPriceOk = true;
   if (!xTok || !xTok.token) { $("xPanel").innerHTML = `<div class="quote">pair data unavailable — <a class="explorer" href="https://dexscreener.com/robinhood/${pair}" target="_blank" rel="noopener">trade on dexscreener ↗</a></div>`; return; }
-  // 1) v2 router
+  // quote EVERY protocol; the deepest pool pays the most and wins — decoy pools mathematically can't
+  const candidates = [];
   try {
     const router = new E.Contract(UNIROUTER, ROUTER_ABI, reader);
-    await router.getAmountsOut(E.parseEther("0.001"), [WETH_ADDR, xTok.token]);
-    xMode = "v2"; xV2 = true; fillXPanel(); return;
+    const out = await router.getAmountsOut(PROBE_IN, [WETH_ADDR, xTok.token]);
+    if (out && out[1] > 0n) candidates.push({ mode: "v2", out: out[1] });
   } catch (e) {}
-  // 2) v4: discover the pool key by probing standard fee tiers (native eth pools, no hooks)
-  const quoter = new E.Contract(V4_QUOTER, V4_QUOTER_ABI, reader);
-  let bestV4 = null, bestV4Out = 0n;
-  for (const [fee, ts] of V4_FEE_TIERS) {
-    try {
-      const key = { currency0: ZERO, currency1: xTok.token, fee, tickSpacing: ts, hooks: ZERO };
-      const r = await quoter.quoteExactInputSingle.staticCall({ poolKey: key, zeroForOne: true, exactAmount: E.parseEther("0.0001"), hookData: "0x" });
-      if (r && r[0] > bestV4Out) { bestV4Out = r[0]; bestV4 = key; } // deepest pool = best output
-    } catch (e) {}
-  }
-  if (bestV4) { xMode = "v4"; xV4Key = bestV4; }
-  // 3) v3: probe standard fee tiers via QuoterV2
-  if (!xMode) {
-    const q3 = new E.Contract(V3_QUOTER, V3_QUOTER_ABI, reader);
-    let bestFee = null, bestOut = 0n;
-    for (const fee of V3_FEES) {
+  try {
+    const quoter = new E.Contract(V4_QUOTER, V4_QUOTER_ABI, reader);
+    for (const [fee, ts] of V4_FEE_TIERS) {
       try {
-        const r = await q3.quoteExactInputSingle.staticCall({ tokenIn: WETH_ADDR, tokenOut: xTok.token, amountIn: E.parseEther("0.0001"), fee, sqrtPriceLimitX96: 0 });
-        if (r && r[0] > bestOut) { bestOut = r[0]; bestFee = fee; }
+        const key = { currency0: ZERO, currency1: xTok.token, fee, tickSpacing: ts, hooks: ZERO };
+        const r = await quoter.quoteExactInputSingle.staticCall({ poolKey: key, zeroForOne: true, exactAmount: PROBE_IN, hookData: "0x" });
+        if (r && r[0] > 0n) candidates.push({ mode: "v4", out: r[0], key });
       } catch (e) {}
     }
-    if (bestFee !== null) { xMode = "v3"; xV3Fee = bestFee; }
-  }
-  if (!xMode) xMode = "none";
-  xV2 = xMode !== "none";
+  } catch (e) {}
+  try {
+    const q3 = new E.Contract(V3_QUOTER, V3_QUOTER_ABI, reader);
+    for (const fee of V3_FEES) {
+      try {
+        const r = await q3.quoteExactInputSingle.staticCall({ tokenIn: WETH_ADDR, tokenOut: xTok.token, amountIn: PROBE_IN, fee, sqrtPriceLimitX96: 0 });
+        if (r && r[0] > 0n) candidates.push({ mode: "v3", out: r[0], fee });
+      } catch (e) {}
+    }
+  } catch (e) {}
+
+  if (!candidates.length) { xMode = "none"; xV2 = false; fillXPanel(); return; }
+  candidates.sort((a, b) => (b.out > a.out ? 1 : -1));
+  const best = candidates[0];
+  xMode = best.mode;
+  if (best.mode === "v4") xV4Key = best.key;
+  if (best.mode === "v3") xV3Fee = best.fee;
+  xV2 = true;
+
+  // price sanity: the route's implied price must agree with the listed market price
+  try {
+    if (ethUsd && xTok.priceUsd > 0) {
+      const tokensOut = Number(E.formatEther(best.out)); // assumes 18 decimals (standard on hood chain)
+      const implied = (0.0001 * ethUsd) / tokensOut;
+      const ratio = implied / xTok.priceUsd;
+      if (ratio > 1.4 || ratio < 0.6) xPriceOk = false;
+    }
+  } catch (e) {}
   fillXPanel();
 }
 
@@ -785,6 +799,12 @@ async function fillXPanel() {
   }
   window._xBal = bal; window._xEthBal = ethBal;
   const buying = xTradeTab === "buy";
+  if (!xPriceOk) {
+    el.innerHTML = `<div class="secLbl">trade</div>
+      <div class="note" style="border:1px solid var(--red);color:var(--red);margin-bottom:12px">⚠️ DECOY POOL DETECTED — the best on-chain route prices this token very differently from its listed market price. that pattern means the tradeable pool isn't the real one. robn.fun won't route into it.</div>
+      <a class="btn ghost" style="text-decoration:none;display:block;text-align:center" href="https://dexscreener.com/robinhood/${xTok.pair}" target="_blank" rel="noopener">view on dexscreener ↗</a>`;
+    return;
+  }
   if (!xTok.liq || xTok.liq < 10000) {
     el.innerHTML = `<div class="secLbl">trade</div>
       <div class="note" style="border:1px solid var(--red);color:var(--red);margin-bottom:12px">⚠️ TRAP RISK — this pool has ${xTok.liq ? "only " + fmtUsd(xTok.liq) : "unknown"} liquidity. buys pump it instantly, sells return dust, and custom contracts can block exits. robn.fun won't route trades into it.</div>
