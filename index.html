@@ -7,6 +7,8 @@
 <link rel="icon" type="image/png" href="/logo.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Sora:wght@400;600&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="dns-prefetch" href="https://dexscreener.com">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.2/ethers.umd.min.js"></script>
 <style>
   *{box-sizing:border-box;margin:0}
@@ -706,6 +708,59 @@ function paintTrenches() {
 }
 
 let xTok = null, xTradeTab = "buy", xV2 = null; // null=unknown, true/false after probe
+
+// ---- chain fallback: when geckoterminal doesn't know a pool, read it ourselves.
+// gets name, token, price, liquidity, fdv from the pool + token contracts.
+const ERC_META_ABI = [
+  "function symbol() view returns (string)",
+  "function name() view returns (string)",
+  "function decimals() view returns (uint8)",
+  "function totalSupply() view returns (uint256)",
+];
+async function hydrateFromChain(pair) {
+  try {
+    const W = WETH_ADDR.toLowerCase();
+    let t0, t1, isV3 = false, poolC = null;
+    try {
+      poolC = new E.Contract(pair, V3_POOL_ABI, reader);
+      const r = await Promise.all([poolC.token0(), poolC.token1(), poolC.fee()]);
+      t0 = r[0]; t1 = r[1]; isV3 = true;
+    } catch (e) {
+      poolC = new E.Contract(pair, V2_PAIR_ABI, reader);
+      const r = await Promise.all([poolC.token0(), poolC.token1()]);
+      t0 = r[0]; t1 = r[1];
+    }
+    const a = t0.toLowerCase(), b = t1.toLowerCase();
+    if (a !== W && b !== W) return null; // not an eth pair — pricing needs a hop
+    const wethIs0 = a === W;
+    const token = wethIs0 ? t1 : t0;
+    const erc = new E.Contract(token, ERC_META_ABI, reader);
+    const weth = new E.Contract(WETH_ADDR, ["function balanceOf(address) view returns (uint256)"], reader);
+    const [sym, dec, supply, wbal] = await Promise.all([
+      erc.symbol().catch(() => null),
+      erc.decimals().then(Number).catch(() => 18),
+      erc.totalSupply().catch(() => null),
+      weth.balanceOf(pair).catch(() => 0n),
+    ]);
+    // eth per token, straight from the pool's own state
+    let ethPerToken = null;
+    if (isV3) {
+      const s = await poolC.slot0();
+      const rawRatio = (Number(s[0]) / 2 ** 96) ** 2;                 // token1_raw per token0_raw
+      ethPerToken = wethIs0 ? 1 / (rawRatio * 10 ** 18 / 10 ** dec)   // weth = token0
+                            : rawRatio * 10 ** dec / 10 ** 18;        // weth = token1
+    } else {
+      const r = await poolC.getReserves();
+      const rw = wethIs0 ? r[0] : r[1], rt = wethIs0 ? r[1] : r[0];
+      if (rw > 0n && rt > 0n) ethPerToken = (Number(rw) / 1e18) / (Number(rt) / 10 ** dec);
+    }
+    const ethSide = Number(E.formatEther(wbal));
+    const liq = ethUsd && ethSide > 0 ? ethSide * 2 * ethUsd : null;
+    const priceUsd = ethUsd && ethPerToken ? ethPerToken * ethUsd : null;
+    const fdv = priceUsd && supply ? (Number(supply) / 10 ** dec) * priceUsd : null;
+    return { pair, name: (sym || short(token)) + " / WETH", token, priceUsd, liq, fdv, ch: {}, vol24: null, onchain: true };
+  } catch (e) { return null; }
+}
 async function renderExternalToken(pair) {
   document.getElementById("homeView").style.display = "none";
   document.querySelector(".feed").style.display = "none";
@@ -714,6 +769,7 @@ async function renderExternalToken(pair) {
   const all = trenchData ? [...(trenchData.trending || []), ...(trenchData.top || []), ...(trenchData.fresh || [])] : [];
   let p = all.find((x) => x.pair.toLowerCase() === pair.toLowerCase());
   if (!p) { try { const r = await (await fetch("/api/pool/" + pair)).json(); if (r.pool) p = r.pool; } catch (e) {} }
+  if (!p) p = await hydrateFromChain(pair); // provider doesn't know this pool — read it off the chain
   xTok = p || null;
   const name = p ? p.name.split("/")[0].trim() : short(pair);
   const ch = (p && p.ch) || {};
@@ -727,12 +783,13 @@ async function renderExternalToken(pair) {
     </div>
     <div class="tpGrid">
       <div class="statRail">
-        <div class="statBox"><span class="lbl">24h volume</span><span class="val">${p ? fmtUsd(p.vol24 || 0) : "—"}</span></div>
+        <div class="statBox"><span class="lbl">24h volume</span><span class="val">${p && p.vol24 ? fmtUsd(p.vol24) : "—"}</span></div>
         <div class="statBox"><span class="lbl">5m change</span><span class="val">${xPct(ch.m5)}</span></div>
         <div class="statBox"><span class="lbl">1h change</span><span class="val">${xPct(ch.h1)}</span></div>
         <div class="statBox"><span class="lbl">6h change</span><span class="val">${xPct(ch.h6)}</span></div>
         <div class="statBox"><span class="lbl">24h change</span><span class="val">${xPct(ch.h24)}</span></div>
-        <div class="statBox"><span class="lbl">liquidity</span><span class="val">${p ? fmtUsd(p.liq || 0) : "—"}</span></div>
+        <div class="statBox"><span class="lbl">liquidity</span><span class="val">${p && p.liq ? fmtUsd(p.liq) : "—"}</span></div>
+        ${p && p.onchain ? `<div class="note" style="font-size:11px">read live from the pool contract — this pair isn't indexed by our data provider yet, so volume and % history are unavailable.</div>` : ""}
       </div>
       <div class="panel chartPanel" style="padding:10px">
         <iframe src="https://dexscreener.com/robinhood/${pair}?embed=1&theme=${document.body.dataset.theme === "light" ? "light" : "dark"}&info=0" style="width:100%;height:620px;border:0;border-radius:12px" title="chart"></iframe>
@@ -1083,6 +1140,26 @@ async function renderCreators() {
   </div>`;
 }
 
+let liveTimer = null;
+function startLive() {
+  paintLive();
+  if (!liveTimer) liveTimer = setInterval(paintLive, 10000);
+}
+async function paintLive() {
+  const el = $("liveBox"); if (!el) { if (liveTimer) { clearInterval(liveTimer); liveTimer = null; } return; }
+  try {
+    const d = await (await fetch("/api/live")).json();
+    const box = (l, v, c) => `<div><span class="lbl">${l}</span><span class="val"${c ? ` style="color:${c}"` : ""}>${v}</span></div>`;
+    el.innerHTML =
+      box("on the site now", d.live, d.live > 0 ? "var(--green)" : null) +
+      box("open tabs", d.tabs) +
+      box("visitors today", d.uniqueToday) +
+      box("page views today", d.viewsToday) +
+      box("peak today", d.peakToday) +
+      box("best day ever", d.bestEver);
+  } catch (e) {}
+}
+
 async function renderStats() {
   document.getElementById("homeView").style.display = "none";
   document.querySelector(".feed").style.display = "none";
@@ -1117,6 +1194,11 @@ async function renderStats() {
     <div style="max-width:1000px;margin:0 auto">
     <a class="back" href="/">← all tokens</a>
     <div class="tpName" style="margin-bottom:14px">Analytics</div>
+    <div class="panel" style="margin-bottom:14px">
+      <div class="secLbl">👀 live right now</div>
+      <div class="heroStats" id="liveBox"><div><span class="lbl">on the site</span><span class="val">…</span></div></div>
+      <div class="note" style="margin-top:8px">counts unique visitors with the site open (your own tabs included). updates every 10s.</div>
+    </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:12px">
       ${card("tokens launched", s.launches)}
       ${card("migrations", s.migrations)}
@@ -1137,32 +1219,27 @@ async function renderStats() {
 }
 
 async function init() {
-  const cfg = await (await fetch("/config")).json();
+  // both server calls fire together; neither touches the chain from the browser
+  const cfgP = fetch("/config").then((r) => r.json()).catch(() => ({}));
+  const cfg = await cfgP;
   PAD_ADDR = cfg.pad;
   reader = new E.JsonRpcProvider(RPC);
   pad = new E.Contract(PAD_ADDR, PAD_ABI, reader);
   loadTurbo();
-  await ethPrice();
-  reconnectSilently();
-  connectLive();
-  startPulse();
-  try { $("feeShow").textContent = E.formatEther(await pad.creationFee()); } catch (e) {}
-  try { MIGRATION_ETH = Number(E.formatEther(await pad.migrationEth())); } catch (e) {}
-  try { FEE_WALLET = await pad.feeWallet(); } catch (e) {}
-  try { PAD_OWNER = await pad.owner(); } catch (e) {}
-  try {
-    if (FEE_WALLET) {
-      const vault = new E.Contract(FEE_WALLET, ["function globalMode() view returns (bool)"], reader);
-      if (await vault.globalMode()) CREATOR_PCT = 100;
-    }
-  } catch (e) {} // feeWallet is a plain wallet → stays 50
+  // constants come pre-read from the server cache — zero rpc round trips before first paint
+  if (cfg.ethUsd) ethUsd = cfg.ethUsd;
+  if (cfg.migrationEth) MIGRATION_ETH = Number(E.formatEther(BigInt(cfg.migrationEth)));
+  if (cfg.feeWallet) FEE_WALLET = cfg.feeWallet;
+  if (cfg.owner) PAD_OWNER = cfg.owner;
+  if (cfg.creatorPct) CREATOR_PCT = cfg.creatorPct;
+  try { if (cfg.creationFee) $("feeShow").textContent = E.formatEther(BigInt(cfg.creationFee)); } catch (e) {}
   const pctEl = $("creatorPct"); if (pctEl) pctEl.textContent = CREATOR_PCT;
-  await loadTokens();
+  await loadTokens(true);
   if (pageToken) {
     document.getElementById("homeView").style.display = "none";
     document.querySelector(".feed").style.display = "none";
     renderTokenPage();
-    setInterval(async () => { await loadTokens(); renderTokenPage(true); }, 20000);
+    setInterval(async () => { await loadTokens(true); await refreshCurrentToken(); }, 20000);
   } else if (creatorsPage) {
     renderCreators();
   } else if (trenchPage) {
@@ -1171,6 +1248,7 @@ async function init() {
     renderExternalToken(xPair);
   } else if (statsPage) {
     renderStats();
+    setTimeout(startLive, 300);
     setInterval(renderStats, 30000);
   } else if (seasonPage) {
     renderSeason();
@@ -1180,6 +1258,9 @@ async function init() {
     watchNewTokens();
   }
   loadFeed(); // trending ticker on every page
+  // deferred: nothing below blocks first paint
+  setTimeout(() => { reconnectSilently(); connectLive(); startPulse(); }, 0);
+  setTimeout(() => { loadTokens(); if (!ethUsd) ethPrice(); }, 1500); // verify cache against chain in the background
   try { const r = new URLSearchParams(location.search).get("ref"); if (r && /^0x[0-9a-fA-F]{40}$/.test(r)) localStorage.setItem("robn-ref", r); } catch (e) {}
   setInterval(ethPrice, 60000);
 }
@@ -1527,12 +1608,12 @@ async function loadTrades(t) {
   } catch (e) {}
 }
 
-async function loadTokens() {
+async function loadTokens(skipVerify) {
   // fast path: server-built cache, one fetch
   try {
     const c = await (await fetch("/tokens")).json();
     let chainCount = null;
-    try { chainCount = Number(await pad.tokenCount()); } catch (e) {}
+    if (!skipVerify) { try { chainCount = Number(await pad.tokenCount()); } catch (e) {} }
     if (c && c.ts && c.tokens && (chainCount === null || c.tokens.length >= chainCount)) {
       tokens = c.tokens.map((t) => {
         const priceEth = Number(E.formatEther(BigInt(t.price)));
@@ -1937,6 +2018,17 @@ async function quoteS() {
   } catch (e) {}
 }
 
+// after a trade the read node is often a block behind — poll briefly so the panel
+// never repaints with the pre-trade balance (that's the stale-slider bug).
+async function settleBalance(who, before) {
+  if (!who) return;
+  for (let i = 0; i < 6; i++) {
+    try { const b = await reader.getBalance(who); if (b !== before) return; } catch (e) {}
+    await new Promise((r) => setTimeout(r, 450));
+  }
+}
+function tradeWho() { return (turbo.on && turbo.wallet) ? turbo.wallet.address : wallet; }
+
 async function doBuy() {
   const useTurbo = turbo.on && turbo.wallet;
   if (!useTurbo && !(await needWallet())) return;
@@ -1947,7 +2039,9 @@ async function doBuy() {
     const tx = await pad.connect(tradeSigner()).buy(currentToken.addr, { value: E.parseEther(v.toString()) });
     st.textContent = "buying…"; await tx.wait();
     st.className = "status ok"; st.textContent = useTurbo ? "⚡ bought" : "✅ bought";
-    refreshCurrentToken(); loadTokens();
+    await settleBalance(tradeWho(), window._ethBal);
+    $("buyAmt").value = ""; const bs = $("buySlide"); if (bs) bs.value = 0;
+    await refreshCurrentToken(); loadTokens();
   } catch (e) { st.className = "status err"; st.textContent = e.shortMessage || e.message; }
 }
 
@@ -1970,7 +2064,9 @@ async function doSell() {
     const tx = await pad.connect(s).sell(currentToken.addr, amt);
     st.textContent = "selling…"; await tx.wait();
     st.className = "status ok"; st.textContent = useTurbo ? "⚡ sold" : "✅ sold";
-    refreshCurrentToken(); loadTokens();
+    await settleBalance(tradeWho(), window._ethBal);
+    $("sellAmt").value = ""; const ss = $("sellSlide"); if (ss) ss.value = 0;
+    await refreshCurrentToken(); loadTokens();
   } catch (e) { st.className = "status err"; st.textContent = e.shortMessage || e.message; }
 }
 

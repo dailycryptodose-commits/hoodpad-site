@@ -1,4 +1,5 @@
 const express = require("express");
+const zlib = require("zlib");
 const path = require("path");
 const fs = require("fs");
 const http = require("http");
@@ -6,6 +7,34 @@ const { WebSocketServer } = require("ws");
 const { ethers } = require("ethers");
 
 const app = express();
+
+// gzip text responses: index.html 126KB -> ~34KB on the wire
+app.use((req, res, next) => {
+  const ae = req.headers["accept-encoding"] || "";
+  if (!/\bgzip\b/.test(ae)) return next();
+  const _send = res.send.bind(res);
+  const _json = res.json.bind(res);
+  const gz = (body) => {
+    try {
+      if (typeof body !== "string" || body.length < 1024) return null;
+      if (res.getHeader("Content-Encoding")) return null;
+      const buf = zlib.gzipSync(Buffer.from(body), { level: 6 });
+      res.setHeader("Content-Encoding", "gzip");
+      res.setHeader("Vary", "Accept-Encoding");
+      res.removeHeader("Content-Length");
+      return buf;
+    } catch (e) { return null; }
+  };
+  res.send = (body) => { const b = gz(body); return b ? _send(b) : _send(body); };
+  res.json = (obj) => {
+    const s = JSON.stringify(obj);
+    const b = gz(s);
+    if (!b) return _json(obj);
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    return _send(b);
+  };
+  next();
+});
 app.use(express.json({ limit: "4mb" })); // room for base64 logo uploads
 
 const PAD = process.env.PAD_ADDRESS;
@@ -15,6 +44,14 @@ const RPC = "https://rpc.mainnet.chain.robinhood.com";
 const provider = new ethers.JsonRpcProvider(RPC);
 const pad = PAD ? new ethers.Contract(PAD, [
   "function curves(address) view returns (uint ethReserve, uint tokReserve, uint realEth, address creator, bool migrated)"
+], provider) : null;
+
+// admin/config reads live on their own instance — `pad` above only knows curves()
+const padCfg = PAD ? new ethers.Contract(PAD, [
+  "function creationFee() view returns (uint)",
+  "function migrationEth() view returns (uint)",
+  "function feeWallet() view returns (address)",
+  "function owner() view returns (address)"
 ], provider) : null;
 
 // storage — railway volume at /data if mounted, else local (resets on redeploy)
@@ -30,7 +67,68 @@ const clean = (s, max) => (typeof s === "string" ? s.trim().slice(0, max) : "");
 const okUrl = (s) => !s || /^https?:\/\/[^\s]+$/i.test(s) || /^\/img\//.test(s);
 const MIME_EXT = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" };
 
-app.get("/config", (req, res) => res.json({ pad: PAD || "" }));
+// everything the client needs before first paint, read once server-side and cached.
+// kills 5 sequential RPC round trips per page load.
+let cfgCache = { ts: 0, data: null };
+let ethUsdCache = { ts: 0, v: 0 };
+
+async function warmEthUsd() {
+  if (Date.now() - ethUsdCache.ts < 60_000 && ethUsdCache.v) return ethUsdCache.v;
+  const srcs = [
+    ["https://api.coinbase.com/v2/prices/ETH-USD/spot", (j) => +j.data.amount],
+    ["https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT", (j) => +j.price],
+    ["https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd", (j) => j.ethereum.usd],
+  ];
+  for (const [u, f] of srcs) {
+    try {
+      const r = await fetch(u, { signal: AbortSignal.timeout(4000) });
+      if (!r.ok) continue;
+      const v = f(await r.json());
+      if (v > 0) { ethUsdCache = { ts: Date.now(), v }; return v; }
+    } catch (e) {}
+  }
+  return ethUsdCache.v;
+}
+
+async function warmConfig() {
+  try {
+    if (!padCfg) return;
+    const [creationFee, migrationEth, feeWallet, owner, ethUsd] = await Promise.all([
+      padCfg.creationFee().catch(() => null),
+      padCfg.migrationEth().catch(() => null),
+      padCfg.feeWallet().catch(() => null),
+      padCfg.owner().catch(() => null),
+      warmEthUsd(),
+    ]);
+    let creatorPct = 50;
+    if (feeWallet) {
+      try {
+        const v = new ethers.Contract(feeWallet, ["function globalMode() view returns (bool)"], provider);
+        if (await v.globalMode()) creatorPct = 100;
+      } catch (e) {}
+    }
+    cfgCache = {
+      ts: Date.now(),
+      data: {
+        pad: PAD || "",
+        creationFee: creationFee ? creationFee.toString() : null,
+        migrationEth: migrationEth ? migrationEth.toString() : null,
+        feeWallet: feeWallet || null,
+        owner: owner || null,
+        creatorPct,
+        ethUsd,
+      },
+    };
+  } catch (e) {}
+}
+warmConfig();
+setInterval(warmConfig, 60_000);
+
+app.get("/config", async (req, res) => {
+  if (!cfgCache.data) await warmConfig();
+  res.setHeader("Cache-Control", "public, max-age=20");
+  res.json(cfgCache.data || { pad: PAD || "" });
+});
 app.get("/meta", (req, res) => res.json(meta));
 
 // set token metadata — only the on-chain creator can, proven by wallet signature.
@@ -87,11 +185,85 @@ app.get("/logo.png", (req, res) => { res.setHeader("Cache-Control", "public, max
 for (const f of ["logo-wide.png", "logo-dark.png", "logo-light.png"]) {
   app.get("/" + f, (req, res) => { res.setHeader("Cache-Control", "public, max-age=86400"); res.sendFile(path.join(__dirname, f)); });
 }
-app.get("/", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+// index.html served from memory (gzipped by the middleware above)
+let indexCache = null;
+function readIndex() {
+  try { indexCache = fs.readFileSync(path.join(__dirname, "index.html"), "utf8"); } catch (e) {}
+  return indexCache;
+}
+readIndex();
+function sendIndex(res, req) {
+  if (req) noteVisitor(req);
+  const html = indexCache || readIndex();
+  if (!html) return res.status(500).send("index missing");
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  // no-cache = "always ask if it changed". with ETag that's a tiny 304 when it hasn't,
+  // and the new build the instant it has. this is what kills the hard-refresh ritual.
+  res.setHeader("Cache-Control", "no-cache, must-revalidate");
+  res.send(html);
+}
+app.get("/", (req, res) => sendIndex(res, req));
 
 // ---- realtime: websocket push of trades & launches (~2.5s from chain) ----
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
+
+// ---- live visitors: every open tab holds a ws connection, so counting them is free.
+// ips are hashed (never stored raw) and only used to tell people apart.
+const crypto = require("crypto");
+const VISIT_FILE = path.join(DATA_DIR, "visits.json");
+const SALT = "robn-" + (PAD || "x");
+let visits = { day: "", uniq: [], views: 0, peak: 0, best: 0 };
+try { visits = Object.assign(visits, JSON.parse(fs.readFileSync(VISIT_FILE, "utf8"))); } catch (e) {}
+const hashIp = (ip) => crypto.createHash("sha256").update(SALT + ip).digest("hex").slice(0, 16);
+function today() { return new Date().toISOString().slice(0, 10); }
+function rollDay() {
+  const d = today();
+  if (visits.day !== d) {
+    if (visits.peak > (visits.best || 0)) visits.best = visits.peak;
+    visits = { day: d, uniq: [], views: 0, peak: 0, best: visits.best || 0 };
+  }
+}
+function noteVisitor(req) {
+  try {
+    rollDay();
+    const ip = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "";
+    if (!ip) return;
+    const h = hashIp(ip);
+    visits.views++;
+    if (!visits.uniq.includes(h)) visits.uniq.push(h);
+    if (visits.uniq.length > 20000) visits.uniq = visits.uniq.slice(-20000);
+    fs.writeFileSync(VISIT_FILE, JSON.stringify(visits));
+  } catch (e) {}
+}
+const liveIps = new Map(); // hashed ip -> open tab count
+wss.on("connection", (ws, req) => {
+  try {
+    rollDay();
+    const ip = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "";
+    const h = ip ? hashIp(ip) : "?";
+    ws._ipHash = h;
+    liveIps.set(h, (liveIps.get(h) || 0) + 1);
+    if (liveIps.size > (visits.peak || 0)) { visits.peak = liveIps.size; try { fs.writeFileSync(VISIT_FILE, JSON.stringify(visits)); } catch (e) {} }
+    ws.on("close", () => {
+      const n = (liveIps.get(h) || 1) - 1;
+      if (n <= 0) liveIps.delete(h); else liveIps.set(h, n);
+    });
+  } catch (e) {}
+});
+
+app.get("/api/live", (req, res) => {
+  rollDay();
+  res.json({
+    live: liveIps.size,            // people on the site right now (unique, not tabs)
+    tabs: wss.clients.size,        // open tabs
+    uniqueToday: visits.uniq.length,
+    viewsToday: visits.views,
+    peakToday: visits.peak || 0,
+    bestEver: visits.best || 0,
+  });
+});
+
 function broadcast(msg) {
   const data = JSON.stringify(msg);
   for (const c of wss.clients) { if (c.readyState === 1) { try { c.send(data); } catch (e) {} } }
@@ -174,7 +346,8 @@ function saveClaimBot() {
 // the pad's feeWallet IS the vault (if it's a vault at all)
 async function findVault() {
   try {
-    const fw = await pad.feeWallet();
+    if (!padCfg) return null;
+    const fw = await padCfg.feeWallet();
     if (botVault && botVault.addr.toLowerCase() === fw.toLowerCase()) return botVault;
     const c = new ethers.Contract(fw, VAULT_ABI2, claimBot);
     await c.globalMode(); // throws if feeWallet is a plain wallet
@@ -419,7 +592,7 @@ app.get("/t/:token", (req, res) => {
   } catch (e) {}
   res.sendFile(path.join(__dirname, "index.html"));
 });
-app.get("/creators", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+app.get("/creators", (req, res) => sendIndex(res, req));
 app.get("/vault-admin", (req, res) => res.sendFile(path.join(__dirname, "vault-admin.html")));
 
 // ---- analytics indexer ----
@@ -557,9 +730,9 @@ app.get("/stats", (req, res) => {
   });
 });
 
-app.get("/analytics", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
-app.get("/trenches", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
-app.get("/x/:pair", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+app.get("/analytics", (req, res) => sendIndex(res, req));
+app.get("/trenches", (req, res) => sendIndex(res, req));
+app.get("/x/:pair", (req, res) => sendIndex(res, req));
 
 // hood-chain-wide token data via geckoterminal (free api, cached 30s)
 let trenchCache = { ts: 0, data: null };
