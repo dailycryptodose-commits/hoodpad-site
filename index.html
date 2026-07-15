@@ -333,6 +333,18 @@ const PAD_ABI = [
   "event Sell(address indexed token, address indexed seller, uint tokensIn, uint ethOut, uint taxEth)"
 ];
 const UNIROUTER = "0x89e5db8b5aa49aa85ac63f691524311aeb649eba";
+// uniswap v4 on robinhood chain (official deployment)
+const V4_ROUTER = "0x8876789976decbfcbbbe364623c63652db8c0904";
+const V4_QUOTER = "0x8dc178efb8111bb0973dd9d722ebeff267c98f94";
+const PERMIT2 = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
+const ZERO = "0x0000000000000000000000000000000000000000";
+const V4_QUOTER_ABI = ["function quoteExactInputSingle((tuple(address currency0,address currency1,uint24 fee,int24 tickSpacing,address hooks) poolKey,bool zeroForOne,uint128 exactAmount,bytes hookData) params) returns (uint256 amountOut, uint256 gasEstimate)"];
+const UR_ABI = ["function execute(bytes commands, bytes[] inputs, uint256 deadline) payable"];
+const PERMIT2_ABI = [
+  "function approve(address token, address spender, uint160 amount, uint48 expiration)",
+  "function allowance(address user, address token, address spender) view returns (uint160 amount, uint48 expiration, uint48 nonce)",
+];
+const V4_FEE_TIERS = [[10000, 200], [3000, 60], [500, 10], [100, 1], [20000, 400], [30000, 600]];
 const WETH_ADDR = "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73";
 const ROUTER_ABI = [
   "function getAmountsOut(uint amountIn, address[] path) view returns (uint[] amounts)",
@@ -619,21 +631,35 @@ function xPct(v) {
   return `<span style="color:${c}">${v >= 0 ? "+" : ""}${Number(v).toFixed(1)}%</span>`;
 }
 
+let xMode = null, xV4Key = null; // "v2" | "v4" | "none"
 async function probeAndFillX(pair) {
-  xV2 = null;
+  xMode = null; xV4Key = null; xV2 = null;
   if (!xTok || !xTok.token) { $("xPanel").innerHTML = `<div class="quote">pair data unavailable — <a class="explorer" href="https://dexscreener.com/robinhood/${pair}" target="_blank" rel="noopener">trade on dexscreener ↗</a></div>`; return; }
+  // 1) v2 router
   try {
     const router = new E.Contract(UNIROUTER, ROUTER_ABI, reader);
     await router.getAmountsOut(E.parseEther("0.001"), [WETH_ADDR, xTok.token]);
-    xV2 = true;
-  } catch (e) { xV2 = false; }
+    xMode = "v2"; xV2 = true; fillXPanel(); return;
+  } catch (e) {}
+  // 2) v4: discover the pool key by probing standard fee tiers (native eth pools, no hooks)
+  const quoter = new E.Contract(V4_QUOTER, V4_QUOTER_ABI, reader);
+  for (const [fee, ts] of V4_FEE_TIERS) {
+    try {
+      const key = { currency0: ZERO, currency1: xTok.token, fee, tickSpacing: ts, hooks: ZERO };
+      const r = await quoter.quoteExactInputSingle.staticCall({ poolKey: key, zeroForOne: true, exactAmount: E.parseEther("0.0001"), hookData: "0x" });
+      if (r && r[0] > 0n) { xMode = "v4"; xV4Key = key; break; }
+    } catch (e) {}
+  }
+  if (!xMode) xMode = "none";
+  xV2 = xMode !== "none";
   fillXPanel();
 }
 
 async function fillXPanel() {
   const el = $("xPanel"); if (!el || !xTok) return;
-  if (!xV2) {
-    el.innerHTML = `<div class="secLbl">trade</div><div class="quote" style="margin-bottom:12px">this pair trades on a router we don't support in-site yet</div><a class="btn" style="text-decoration:none;display:block;text-align:center" href="https://dexscreener.com/robinhood/${xTok.pair}" target="_blank" rel="noopener">trade ↗</a>`;
+  if (xMode === null) { el.innerHTML = `<div class="quote">checking swap support…</div>`; return; }
+  if (xMode === "none") {
+    el.innerHTML = `<div class="secLbl">trade</div><div class="quote" style="margin-bottom:12px">this pool uses custom hooks we can't route yet</div><a class="btn" style="text-decoration:none;display:block;text-align:center" href="https://dexscreener.com/robinhood/${xTok.pair}" target="_blank" rel="noopener">trade ↗</a>`;
     return;
   }
   let bal = null, ethBal = null;
@@ -664,7 +690,7 @@ async function fillXPanel() {
     <button class="btn ${buying ? "" : "ctaSell"}" style="width:100%;padding:13px" onclick="doSwapX()">${buying ? "Buy" : "Sell"}</button>
     ${who ? "" : `<div class="quote" style="margin-top:10px">connect wallet or enable ⚡ to trade</div>`}
     <div class="status" id="xStatus"></div>
-    <div class="note">swaps route through uniswap on robinhood chain · 5% max slippage</div>`;
+    <div class="note">routes through uniswap ${xMode} on robinhood chain · 5% max slippage</div>`;
 }
 function setXTab(t) { xTradeTab = t; fillXPanel(); }
 function slideX(p) {
@@ -692,23 +718,68 @@ function setXPct(p) {
   const l = $("xSlidePct"); if (l) l.textContent = p + "%";
   quoteX();
 }
+async function xQuoteOut(amtIn, buying) {
+  if (xMode === "v2") {
+    const router = new E.Contract(UNIROUTER, ROUTER_ABI, reader);
+    const out = await router.getAmountsOut(amtIn, buying ? [WETH_ADDR, xTok.token] : [xTok.token, WETH_ADDR]);
+    return out[1];
+  }
+  if (xMode === "v4") {
+    const quoter = new E.Contract(V4_QUOTER, V4_QUOTER_ABI, reader);
+    const r = await quoter.quoteExactInputSingle.staticCall({ poolKey: xV4Key, zeroForOne: buying, exactAmount: amtIn, hookData: "0x" });
+    return r[0];
+  }
+  throw new Error("no route");
+}
 async function quoteX() {
   const q = $("xQuote"); if (!q) return;
   const v = parseFloat($("xAmt").value); if (!v || v <= 0) { q.textContent = ""; return; }
   try {
-    const router = new E.Contract(UNIROUTER, ROUTER_ABI, reader);
     if (xTradeTab === "buy") {
-      const out = await router.getAmountsOut(E.parseEther(v.toString()), [WETH_ADDR, xTok.token]);
-      q.textContent = "≈ " + Number(E.formatEther(out[1])).toLocaleString(undefined, { maximumFractionDigits: 0 }) + " tokens" + (ethUsd ? " · $" + (v * ethUsd).toFixed(2) : "");
+      const out = await xQuoteOut(E.parseEther(v.toString()), true);
+      q.textContent = "≈ " + Number(E.formatEther(out)).toLocaleString(undefined, { maximumFractionDigits: 0 }) + " tokens" + (ethUsd ? " · $" + (v * ethUsd).toFixed(2) : "");
     } else {
       const amt = (window._xExact && window._xExact.v === $("xAmt").value) ? window._xExact.amt : E.parseEther(v.toString());
-      const out = await router.getAmountsOut(amt, [xTok.token, WETH_ADDR]);
-      const eth = Number(E.formatEther(out[1]));
+      const out = await xQuoteOut(amt, false);
+      const eth = Number(E.formatEther(out));
       q.textContent = "≈ " + eth.toFixed(5) + " ETH" + (ethUsd ? " ($" + (eth * ethUsd).toFixed(2) + ")" : "");
       const u = $("xSlideUsd"); if (u && ethUsd) u.textContent = "$" + (eth * ethUsd).toFixed(2);
     }
   } catch (e) { q.textContent = ""; }
 }
+function encodeV4Swap(buying, amountIn, minOut) {
+  const abi = E.AbiCoder.defaultAbiCoder();
+  const key = [xV4Key.currency0, xV4Key.currency1, xV4Key.fee, xV4Key.tickSpacing, xV4Key.hooks];
+  // actions: SWAP_EXACT_IN_SINGLE (0x06) → SETTLE_ALL (0x0c) → TAKE_ALL (0x0f)
+  const actions = "0x060c0f";
+  const swapParams = abi.encode(
+    ["tuple(tuple(address,address,uint24,int24,address),bool,uint128,uint128,bytes)"],
+    [[key, buying, amountIn, minOut, "0x"]]
+  );
+  const inCur = buying ? xV4Key.currency0 : xV4Key.currency1;   // eth in on buys, token in on sells
+  const outCur = buying ? xV4Key.currency1 : xV4Key.currency0;
+  const settle = abi.encode(["address", "uint256"], [inCur, amountIn]);
+  const take = abi.encode(["address", "uint256"], [outCur, minOut]);
+  const input = abi.encode(["bytes", "bytes[]"], [actions, [swapParams, settle, take]]);
+  return { commands: "0x10", inputs: [input] }; // 0x10 = V4_SWAP
+}
+
+async function ensurePermit2(s, owner, amt, st, useTurbo) {
+  const tok = new E.Contract(xTok.token, TOK_ABI, s);
+  const erc20Allow = await tok.allowance(owner, PERMIT2);
+  if (erc20Allow < amt) {
+    st.textContent = useTurbo ? "⚡ approving (1/2)…" : "approve permit2 — confirm in wallet…";
+    const a = await tok.approve(PERMIT2, E.MaxUint256); await a.wait();
+  }
+  const p2 = new E.Contract(PERMIT2, PERMIT2_ABI, s);
+  const cur = await p2.allowance(owner, xTok.token, V4_ROUTER);
+  const now = Math.floor(Date.now() / 1000);
+  if (cur[0] < amt || Number(cur[1]) < now + 60) {
+    st.textContent = useTurbo ? "⚡ approving (2/2)…" : "authorize router — confirm in wallet…";
+    const b = await p2.approve(xTok.token, V4_ROUTER, (1n << 160n) - 1n, (1n << 48n) - 1n); await b.wait();
+  }
+}
+
 async function doSwapX() {
   const useTurbo = turbo.on && turbo.wallet;
   if (!useTurbo && !(await needWallet())) return;
@@ -717,28 +788,38 @@ async function doSwapX() {
   const s = tradeSigner();
   const to = useTurbo ? turbo.wallet.address : wallet;
   const deadline = Math.floor(Date.now() / 1000) + 600;
+  const buying = xTradeTab === "buy";
   try {
-    const router = new E.Contract(UNIROUTER, ROUTER_ABI, s);
-    if (xTradeTab === "buy") {
-      const amountIn = E.parseEther(v.toString());
-      const out = await router.getAmountsOut(amountIn, [WETH_ADDR, xTok.token]);
-      const minOut = (out[1] * 95n) / 100n;
-      st.textContent = useTurbo ? "⚡ buying…" : "confirm in wallet…";
-      const tx = await router.swapExactETHForTokensSupportingFeeOnTransferTokens(minOut, [WETH_ADDR, xTok.token], to, deadline, { value: amountIn });
+    const amountIn = buying
+      ? E.parseEther(v.toString())
+      : ((window._xExact && window._xExact.v === $("xAmt").value) ? window._xExact.amt : E.parseEther(v.toString()));
+    const quoted = await xQuoteOut(amountIn, buying);
+    const minOut = (quoted * 95n) / 100n;
+
+    if (xMode === "v2") {
+      const router = new E.Contract(UNIROUTER, ROUTER_ABI, s);
+      if (buying) {
+        st.textContent = useTurbo ? "⚡ buying…" : "confirm in wallet…";
+        const tx = await router.swapExactETHForTokensSupportingFeeOnTransferTokens(minOut, [WETH_ADDR, xTok.token], to, deadline, { value: amountIn });
+        await tx.wait();
+      } else {
+        const tok = new E.Contract(xTok.token, TOK_ABI, s);
+        const allow = await tok.allowance(to, UNIROUTER);
+        if (allow < amountIn) { st.textContent = useTurbo ? "⚡ approving…" : "approve — confirm in wallet…"; const a = await tok.approve(UNIROUTER, E.MaxUint256); await a.wait(); }
+        st.textContent = useTurbo ? "⚡ selling…" : "confirm sell in wallet…";
+        const tx = await router.swapExactTokensForETHSupportingFeeOnTransferTokens(amountIn, minOut, [xTok.token, WETH_ADDR], to, deadline);
+        await tx.wait();
+      }
+    } else if (xMode === "v4") {
+      if (!buying) await ensurePermit2(s, to, amountIn, st, useTurbo);
+      const { commands, inputs } = encodeV4Swap(buying, amountIn, minOut);
+      const ur = new E.Contract(V4_ROUTER, UR_ABI, s);
+      st.textContent = useTurbo ? (buying ? "⚡ buying…" : "⚡ selling…") : "confirm in wallet…";
+      const tx = await ur.execute(commands, inputs, deadline, { value: buying ? amountIn : 0n });
       await tx.wait();
-      st.className = "status ok"; st.textContent = (useTurbo ? "⚡" : "✅") + " bought";
-    } else {
-      const amt = (window._xExact && window._xExact.v === $("xAmt").value) ? window._xExact.amt : E.parseEther(v.toString());
-      const tok = new E.Contract(xTok.token, TOK_ABI, s);
-      const allow = await tok.allowance(to, UNIROUTER);
-      if (allow < amt) { st.textContent = useTurbo ? "⚡ approving…" : "approve — confirm in wallet…"; const a = await tok.approve(UNIROUTER, E.MaxUint256); await a.wait(); }
-      const out = await router.getAmountsOut(amt, [xTok.token, WETH_ADDR]);
-      const minOut = (out[1] * 95n) / 100n;
-      st.textContent = useTurbo ? "⚡ selling…" : "confirm sell in wallet…";
-      const tx = await router.swapExactTokensForETHSupportingFeeOnTransferTokens(amt, minOut, [xTok.token, WETH_ADDR], to, deadline);
-      await tx.wait();
-      st.className = "status ok"; st.textContent = (useTurbo ? "⚡" : "✅") + " sold";
-    }
+    } else { throw new Error("no route for this pair"); }
+
+    st.className = "status ok"; st.textContent = (useTurbo ? "⚡" : "✅") + (buying ? " bought" : " sold");
     fillXPanel();
   } catch (e) { st.className = "status err"; st.textContent = e.shortMessage || e.message; }
 }
