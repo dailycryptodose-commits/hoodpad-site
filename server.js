@@ -18,6 +18,12 @@ app.use((req, res, next) => {
     try {
       if (typeof body !== "string" || body.length < 1024) return null;
       if (res.getHeader("Content-Encoding")) return null;
+      // express infers Content-Type from what it's given: a string → text/html,
+      // a Buffer → application/octet-stream (which makes browsers DOWNLOAD the page).
+      // we're about to hand it a Buffer, so pin the type express would have chosen.
+      if (!res.getHeader("Content-Type")) {
+        res.setHeader("Content-Type", /^\s*[[{]/.test(body) ? "application/json; charset=utf-8" : "text/html; charset=utf-8");
+      }
       const buf = zlib.gzipSync(Buffer.from(body), { level: 6 });
       res.setHeader("Content-Encoding", "gzip");
       res.setHeader("Vary", "Accept-Encoding");
