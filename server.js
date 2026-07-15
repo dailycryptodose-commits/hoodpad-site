@@ -111,6 +111,7 @@ async function warmConfig() {
       ts: Date.now(),
       data: {
         pad: PAD || "",
+        locker: process.env.LOCKER_ADDRESS || "",
         creationFee: creationFee ? creationFee.toString() : null,
         migrationEth: migrationEth ? migrationEth.toString() : null,
         feeWallet: feeWallet || null,
@@ -127,7 +128,7 @@ setInterval(warmConfig, 60_000);
 app.get("/config", async (req, res) => {
   if (!cfgCache.data) await warmConfig();
   res.setHeader("Cache-Control", "public, max-age=20");
-  res.json(cfgCache.data || { pad: PAD || "" });
+  res.json(cfgCache.data || { pad: PAD || "", locker: process.env.LOCKER_ADDRESS || "" });
 });
 app.get("/meta", (req, res) => res.json(meta));
 
@@ -371,9 +372,42 @@ async function poolTrades(pair, meta, usd) {
         out.push({ buy, usd: eth * usd, eth, tx: lg.transactionHash });
       } catch (e) {}
     }
+    if (out.length) console.log("📊 " + pair.slice(0, 10) + ": " + out.length + " swap(s) → " + out.map((t) => (t.buy ? "BUY $" : "SELL $") + t.usd.toFixed(0)).join(", "));
     return out;
-  } catch (e) { return []; }
+  } catch (e) {
+    if (!poolLogWarned) { poolLogWarned = true; console.log("⚠️ swap-log scan failed — the live feed will stay empty:", e.shortMessage || e.message); }
+    return [];
+  }
 }
+let poolLogWarned = false;
+
+// open robn.fun/api/pooldebug/<pair> — runs the real scan path and reports where it stops
+app.get("/api/pooldebug/:pair", async (req, res) => {
+  const pair = String(req.params.pair || "").toLowerCase();
+  const out = { pair, watching: poolWatch.has(pair), cursor: poolLogBlock.get(pair) ?? null, ethUsd: ethUsdCache.v || null };
+  try {
+    const meta = await getPoolMeta(pair);
+    out.meta = meta ? { version: meta.v3 ? "v3" : "v2", wethIsToken0: meta.wethIs0, decimals: meta.dec } : "NOT AN ETH PAIR or unreadable";
+    if (!meta) return res.json(out);
+    const latest = await provider.getBlockNumber();
+    out.latestBlock = latest;
+    const topic = meta.v3 ? SWAP_V3_TOPIC : SWAP_V2_TOPIC;
+    out.topicUsed = topic;
+    for (const span of [200, 2000, 20000]) {
+      try {
+        const logs = await provider.getLogs({ address: pair, fromBlock: latest - span, toBlock: latest, topics: [topic] });
+        out["swapsInLast" + span] = logs.length;
+        if (logs.length && !out.lastSwapTx) out.lastSwapTx = logs[logs.length - 1].transactionHash;
+      } catch (e) { out["swapsInLast" + span] = "RPC ERROR: " + (e.shortMessage || e.message); break; }
+    }
+    try {
+      const any = await provider.getLogs({ address: pair, fromBlock: latest - 2000, toBlock: latest });
+      out.anyEventsLast2000 = any.length;
+      out.topicsSeen = [...new Set(any.map((l) => l.topics[0]))].slice(0, 6);
+    } catch (e) { out.anyEventsLast2000 = "RPC ERROR: " + (e.shortMessage || e.message); }
+  } catch (e) { out.error = e.shortMessage || e.message; }
+  res.json(out);
+});
 
 async function poolTick() {
   const pairs = [...poolWatch.keys()];
@@ -740,6 +774,7 @@ app.get("/t/:token", (req, res) => {
 });
 app.get("/creators", (req, res) => sendIndex(res, req));
 app.get("/vault-admin", (req, res) => res.sendFile(path.join(__dirname, "vault-admin.html")));
+app.get("/lock", (req, res) => res.sendFile(path.join(__dirname, "lock.html")));
 
 // ---- analytics indexer ----
 const STATS_FILE = path.join(DATA_DIR, "stats.json");

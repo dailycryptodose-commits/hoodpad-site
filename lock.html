@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>robn.fun — token locker</title>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.2/ethers.umd.min.js"></script>
+<style>
+  :root{--bg:#0A0C0A;--panel:#111411;--line:#1E241E;--txt:#E8F0E4;--dim:#9BAF94;--faint:#61705C;--mint:#5FBE12;--red:#FF6B6B;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font-family:'Inter',-apple-system,system-ui,sans-serif;padding:28px 16px 80px}
+  .wrap{max-width:760px;margin:0 auto}
+  h1{font-size:24px;margin:0 0 4px;font-weight:800}
+  .sub{color:var(--faint);font-size:13px;margin-bottom:22px;font-family:'JetBrains Mono',ui-monospace,monospace}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;margin-bottom:14px}
+  .lbl{display:block;font-size:11px;color:var(--faint);margin-bottom:6px;letter-spacing:.04em;text-transform:uppercase}
+  input{width:100%;background:#0C0F0C;border:1px solid var(--line);color:var(--txt);border-radius:10px;padding:12px 13px;font-size:14px;font-family:'JetBrains Mono',ui-monospace,monospace}
+  input:focus{outline:none;border-color:var(--mint)}
+  .btn{background:var(--mint);color:#06210A;border:0;border-radius:10px;padding:12px 16px;font-weight:700;font-size:14px;cursor:pointer}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .btn.ghost{background:transparent;border:1px solid var(--line);color:var(--dim)}
+  .chip{background:#0C0F0C;border:1px solid var(--line);color:var(--dim);border-radius:8px;padding:8px 0;font-size:12.5px;cursor:pointer;flex:1;font-family:'JetBrains Mono',ui-monospace,monospace}
+  .chip.on{border-color:var(--mint);color:var(--mint);background:rgba(95,190,18,.08)}
+  .row{display:flex;gap:8px}
+  .status{font-size:12.5px;font-family:'JetBrains Mono',ui-monospace,monospace;margin-top:10px;min-height:17px;color:var(--dim)}
+  .status.ok{color:var(--mint)} .status.err{color:var(--red)}
+  .note{color:var(--faint);font-size:11.5px;line-height:1.55;margin-top:8px}
+  .big{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:18px;font-weight:700}
+  .lockRow{border:1px solid var(--line);border-radius:12px;padding:13px;margin-bottom:9px;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px}
+  .bar{height:6px;background:#0C0F0C;border-radius:99px;overflow:hidden;margin:8px 0}
+  .bar i{display:block;height:100%;background:var(--mint);border-radius:99px}
+  .flex{display:flex;justify-content:space-between;align-items:center;gap:10px}
+  a{color:var(--mint)}
+  .preview{background:rgba(95,190,18,.06);border:1px solid rgba(95,190,18,.25);border-radius:10px;padding:12px;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px;line-height:1.6;margin-top:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🔒 token locker</h1>
+  <div class="sub">lock your creator bag on-chain · robinhood chain</div>
+
+  <div class="panel" id="setupCard" style="display:none">
+    <div class="flex"><div><b>one-time setup</b><div class="note" style="margin:0">no locker deployed yet</div></div>
+      <button class="btn" id="deployBtn" onclick="doDeploy()">Deploy locker</button></div>
+    <div class="status" id="dStatus"></div>
+    <div class="note">deploys the RobnLocker contract. it has no owner and no admin — once live, nobody (including robn.fun) can shorten a lock or move locked tokens.</div>
+  </div>
+
+  <div class="panel">
+    <div class="flex" style="margin-bottom:14px">
+      <div id="whoAmI" class="note" style="margin:0">not connected</div>
+      <button class="btn ghost" id="connectBtn" onclick="connect()">Connect wallet</button>
+    </div>
+
+    <label class="lbl">token contract address</label>
+    <input id="tokAddr" placeholder="0x… paste your token CA" oninput="onTok()">
+    <div class="note" id="tokInfo">paste the CA of the token you launched</div>
+
+    <div style="margin-top:14px">
+      <label class="lbl">amount to lock</label>
+      <input id="amt" placeholder="0" inputmode="decimal" oninput="preview()">
+      <div class="row" style="margin-top:8px">
+        <button class="chip" onclick="pct(25)">25%</button>
+        <button class="chip" onclick="pct(50)">50%</button>
+        <button class="chip" onclick="pct(75)">75%</button>
+        <button class="chip" onclick="pct(100)">100%</button>
+      </div>
+    </div>
+
+    <div style="margin-top:14px">
+      <label class="lbl">lock duration</label>
+      <div class="row">
+        <button class="chip on" id="d7" onclick="setDays(7)">7 days</button>
+        <button class="chip" id="d30" onclick="setDays(30)">30 days</button>
+        <button class="chip" id="d90" onclick="setDays(90)">90 days</button>
+        <button class="chip" id="dc" onclick="customDays()">custom</button>
+      </div>
+    </div>
+
+    <div class="preview" id="prev">pick a token and an amount</div>
+
+    <div class="row" style="margin-top:14px">
+      <button class="btn" style="flex:1;padding:13px" id="lockBtn" onclick="doLock()">🔒 Lock tokens</button>
+    </div>
+    <div class="status" id="lStatus"></div>
+    <div class="note">vests <b>linearly</b> over the period — you can claim what has vested at any time, and you can always <b>extend</b> the lock. you can never shorten it. not even robn.fun can.</div>
+  </div>
+
+  <div class="panel">
+    <div class="lbl">your locks</div>
+    <div id="myLocks"><div class="note" style="margin:0">connect your wallet to see your locks</div></div>
+  </div>
+
+  <div class="note" style="text-align:center">locker: <span id="lockerAddr">—</span></div>
+</div>
+
+<script>
+const E = ethers;
+const RPC = "https://rpc.mainnet.chain.robinhood.com";
+const CHAIN = 4663;
+const ABI = [{"anonymous": false, "inputs": [{"indexed": true, "internalType": "uint256", "name": "id", "type": "uint256"}, {"indexed": true, "internalType": "address", "name": "token", "type": "address"}, {"indexed": false, "internalType": "uint256", "name": "amount", "type": "uint256"}], "name": "Claimed", "type": "event"}, {"anonymous": false, "inputs": [{"indexed": true, "internalType": "uint256", "name": "id", "type": "uint256"}, {"indexed": false, "internalType": "uint64", "name": "oldEnd", "type": "uint64"}, {"indexed": false, "internalType": "uint64", "name": "newEnd", "type": "uint64"}], "name": "Extended", "type": "event"}, {"anonymous": false, "inputs": [{"indexed": true, "internalType": "uint256", "name": "id", "type": "uint256"}, {"indexed": true, "internalType": "address", "name": "token", "type": "address"}, {"indexed": true, "internalType": "address", "name": "owner", "type": "address"}, {"indexed": false, "internalType": "uint256", "name": "amount", "type": "uint256"}, {"indexed": false, "internalType": "uint64", "name": "start", "type": "uint64"}, {"indexed": false, "internalType": "uint64", "name": "end", "type": "uint64"}], "name": "Locked", "type": "event"}, {"inputs": [{"internalType": "uint256", "name": "id", "type": "uint256"}], "name": "claim", "outputs": [], "stateMutability": "nonpayable", "type": "function"}, {"inputs": [{"internalType": "uint256", "name": "id", "type": "uint256"}], "name": "claimable", "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}], "stateMutability": "view", "type": "function"}, {"inputs": [{"internalType": "uint256", "name": "id", "type": "uint256"}, {"internalType": "uint64", "name": "newEnd", "type": "uint64"}], "name": "extend", "outputs": [], "stateMutability": "nonpayable", "type": "function"}, {"inputs": [{"internalType": "address", "name": "owner", "type": "address"}], "name": "idsByOwner", "outputs": [{"internalType": "uint256[]", "name": "", "type": "uint256[]"}], "stateMutability": "view", "type": "function"}, {"inputs": [{"internalType": "address", "name": "token", "type": "address"}], "name": "idsByToken", "outputs": [{"internalType": "uint256[]", "name": "", "type": "uint256[]"}], "stateMutability": "view", "type": "function"}, {"inputs": [{"internalType": "address", "name": "token", "type": "address"}, {"internalType": "uint256", "name": "amount", "type": "uint256"}, {"internalType": "uint64", "name": "end", "type": "uint64"}], "name": "lock", "outputs": [{"internalType": "uint256", "name": "id", "type": "uint256"}], "stateMutability": "nonpayable", "type": "function"}, {"inputs": [{"internalType": "uint256", "name": "", "type": "uint256"}], "name": "locks", "outputs": [{"internalType": "address", "name": "owner", "type": "address"}, {"internalType": "address", "name": "token", "type": "address"}, {"internalType": "uint128", "name": "total", "type": "uint128"}, {"internalType": "uint128", "name": "claimed", "type": "uint128"}, {"internalType": "uint64", "name": "start", "type": "uint64"}, {"internalType": "uint64", "name": "end", "type": "uint64"}], "stateMutability": "view", "type": "function"}, {"inputs": [{"internalType": "address", "name": "token", "type": "address"}], "name": "tokenSummary", "outputs": [{"internalType": "uint256", "name": "totalLocked", "type": "uint256"}, {"internalType": "uint256", "name": "stillLocked", "type": "uint256"}, {"internalType": "uint64", "name": "lastEnd", "type": "uint64"}, {"internalType": "uint256", "name": "lockCount", "type": "uint256"}], "stateMutability": "view", "type": "function"}, {"inputs": [], "name": "totalLocks", "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}], "stateMutability": "view", "type": "function"}, {"inputs": [{"internalType": "uint256", "name": "id", "type": "uint256"}], "name": "vested", "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}], "stateMutability": "view", "type": "function"}];
+const BYTECODE = "0x608060405234801561000f575f80fd5b506112668061001d5f395ff3fe608060405234801561000f575f80fd5b506004361061009b575f3560e01c8063d1d58b2511610063578063d1d58b2514610153578063d2d18eac14610166578063e3f08c1d1461016d578063f4dadc6114610180578063f699ca11146101e4575f80fd5b806320485e4e1461009f578063379607f5146100ea5780635b1fc7f2146100ff578063968fb8ba14610120578063cf955f3414610133575b5f80fd5b6100b26100ad36600461103d565b6101f7565b6040516100e1949392919093845260208401929092526001600160401b03166040830152606082015260800190565b60405180910390f35b6100fd6100f8366004611056565b6103ba565b005b61011261010d366004611083565b6105c7565b6040519081526020016100e1565b61011261012e366004611056565b610b4b565b61014661014136600461103d565b610c78565b6040516100e191906110bc565b610112610161366004611056565b610ce1565b5f54610112565b6100fd61017b3660046110ff565b610db9565b61019361018e366004611056565b610f4f565b604080516001600160a01b0397881681529690951660208701526001600160801b0393841694860194909452911660608401526001600160401b0390811660808401521660a082015260c0016100e1565b6101466101f236600461103d565b610fbb565b5f805f805f60015f876001600160a01b03166001600160a01b031681526020019081526020015f2080548060200260200160405190810160405280929190818152602001828054801561026757602002820191905f5260205f20905b815481526020019060010190808311610253575b50505050509050805191505f5b81518110156103b1575f8083838151811061029157610291611129565b6020026020010151815481106102a9576102a9611129565b5f9182526020918290206040805160c081018252600490930290910180546001600160a01b0390811684526001820154169383019390935260028301546001600160801b03808216928401839052600160801b9091041660608301526003909201546001600160401b038082166080840152600160401b9091041660a082015291506103359088611151565b96505f61035a84848151811061034d5761034d611129565b6020026020010151610b4b565b90508082604001516001600160801b0316610375919061116a565b61037f9088611151565b9650856001600160401b03168260a001516001600160401b031611156103a7578160a0015195505b5050600101610274565b50509193509193565b5f8082815481106103cd576103cd611129565b5f918252602090912060049091020180549091506001600160a01b0316331461042e5760405162461bcd60e51b815260206004820152600e60248201526d3737ba103637b1b59037bbb732b960911b60448201526064015b60405180910390fd5b5f61043883610ce1565b90505f811161047e5760405162461bcd60e51b81526020600482015260126024820152711b9bdd1a1a5b99c81d995cdd1959081e595d60721b6044820152606401610425565b808260020160108282829054906101000a90046001600160801b03166104a4919061117d565b82546001600160801b039182166101009390930a9283029190920219909116179055506001820154825460405163a9059cbb60e01b81526001600160a01b0391821660048201526024810184905291169063a9059cbb906044016020604051808303815f875af115801561051a573d5f803e3d5ffd5b505050506040513d601f19601f8201168201806040525081019061053e91906111a4565b61057c5760405162461bcd60e51b815260206004820152600f60248201526e1d1c985b9cd9995c8819985a5b1959608a1b6044820152606401610425565b60018201546040518281526001600160a01b039091169084907f4ec90e965519d92681267467f775ada5bd214aa92c0dc93d90a5e880ce9ed0269060200160405180910390a3505050565b5f8083116106025760405162461bcd60e51b81526020600482015260086024820152670616d6f756e743d360c41b6044820152606401610425565b42826001600160401b0316116106485760405162461bcd60e51b815260206004820152600b60248201526a195b99081a5b881c185cdd60aa1b6044820152606401610425565b610656426312cc0300611151565b826001600160401b03161061069b5760405162461bcd60e51b815260206004820152600b60248201526a1d1bdbc819985c881bdd5d60aa1b6044820152606401610425565b6040516370a0823160e01b81523060048201525f906001600160a01b038616906370a0823190602401602060405180830381865afa1580156106df573d5f803e3d5ffd5b505050506040513d601f19601f8201168201806040525081019061070391906111c3565b6040516323b872dd60e01b8152336004820152306024820152604481018690529091506001600160a01b038616906323b872dd906064016020604051808303815f875af1158015610756573d5f803e3d5ffd5b505050506040513d601f19601f8201168201806040525081019061077a91906111a4565b6107bc5760405162461bcd60e51b81526020600482015260136024820152721d1c985b9cd9995c919c9bdb4819985a5b1959606a1b6044820152606401610425565b6040516370a0823160e01b81523060048201525f9082906001600160a01b038816906370a0823190602401602060405180830381865afa158015610802573d5f803e3d5ffd5b505050506040513d601f19601f8201168201806040525081019061082691906111c3565b610830919061116a565b90505f811161086e5760405162461bcd60e51b815260206004820152600a6024820152690726563656976656420360b41b6044820152606401610425565b6001600160801b038111156108af5760405162461bcd60e51b8152602060048201526007602482015266746f6f2062696760c81b6044820152606401610425565b5f8054905092505f6040518060c00160405280336001600160a01b03168152602001886001600160a01b03168152602001836001600160801b031681526020015f6001600160801b03168152602001426001600160401b03168152602001866001600160401b0316815250908060018154018082558091505060019003905f5260205f2090600402015f909190919091505f820151815f015f6101000a8154816001600160a01b0302191690836001600160a01b031602179055506020820151816001015f6101000a8154816001600160a01b0302191690836001600160a01b031602179055506040820151816002015f6101000a8154816001600160801b0302191690836001600160801b0316021790555060608201518160020160106101000a8154816001600160801b0302191690836001600160801b031602179055506080820151816003015f6101000a8154816001600160401b0302191690836001600160401b0316021790555060a08201518160030160086101000a8154816001600160401b0302191690836001600160401b03160217905550505060015f876001600160a01b03166001600160a01b031681526020019081526020015f2083908060018154018082558091505060019003905f5260205f20015f909190919091505560025f336001600160a01b03166001600160a01b031681526020019081526020015f2083908060018154018082558091505060019003905f5260205f20015f9091909190915055336001600160a01b0316866001600160a01b0316847f904a8aa9ab681d45182d3583ae57e3cbc0ba1fcb72f9811ec8feee917bdbffe5844289604051610b3a939291909283526001600160401b03918216602084015216604082015260600190565b60405180910390a450509392505050565b5f805f8381548110610b5f57610b5f611129565b5f9182526020918290206040805160c081018252600490930290910180546001600160a01b0390811684526001820154169383019390935260028301546001600160801b0380821692840192909252600160801b90041660608201526003909101546001600160401b038082166080840152600160401b9091041660a082018190529091504210610bfd57604001516001600160801b031692915050565b80608001516001600160401b03164211610c1957505f92915050565b80608001518160a00151610c2d91906111da565b6001600160401b031681608001516001600160401b031642610c4f919061116a565b82604001516001600160801b0316610c6791906111fa565b610c719190611211565b9392505050565b6001600160a01b0381165f90815260026020908152604091829020805483518184028101840190945280845260609392830182828015610cd557602002820191905f5260205f20905b815481526020019060010190808311610cc1575b50505050509050919050565b5f805f8381548110610cf557610cf5611129565b5f91825260208083206040805160c081018252600490940290910180546001600160a01b0390811685526001820154169284019290925260028201546001600160801b0380821692850192909252600160801b9004166060830152600301546001600160401b038082166080840152600160401b9091041660a08201529150610d7d84610b4b565b905081606001516001600160801b03168111610d99575f610db1565b6060820151610db1906001600160801b03168261116a565b949350505050565b5f808381548110610dcc57610dcc611129565b5f918252602090912060049091020180549091506001600160a01b03163314610e285760405162461bcd60e51b815260206004820152600e60248201526d3737ba103637b1b59037bbb732b960911b6044820152606401610425565b60038101546001600160401b03600160401b909104811690831611610e815760405162461bcd60e51b815260206004820152600f60248201526e18d85b881bdb9b1e48195e1d195b99608a1b6044820152606401610425565b610e8f426312cc0300611151565b826001600160401b031610610ed45760405162461bcd60e51b815260206004820152600b60248201526a1d1bdbc819985c881bdd5d60aa1b6044820152606401610425565b6003810180546001600160401b03848116600160401b8181026fffffffffffffffff000000000000000019851617909455604080519490930490911680845260208401919091529185917f47ea75711a21c836ced222f80cea639ac22bb78ba50077f0d05901372cabe315910160405180910390a250505050565b5f8181548110610f5d575f80fd5b5f91825260209091206004909102018054600182015460028301546003909301546001600160a01b0392831694509116916001600160801b0380821692600160801b90920416906001600160401b0380821691600160401b90041686565b6001600160a01b0381165f90815260016020908152604091829020805483518184028101840190945280845260609392830182828015610cd557602002820191905f5260205f2090815481526020019060010190808311610cc15750505050509050919050565b80356001600160a01b0381168114611038575f80fd5b919050565b5f6020828403121561104d575f80fd5b610c7182611022565b5f60208284031215611066575f80fd5b5035919050565b80356001600160401b0381168114611038575f80fd5b5f805f60608486031215611095575f80fd5b61109e84611022565b9250602084013591506110b36040850161106d565b90509250925092565b602080825282518282018190525f9190848201906040850190845b818110156110f3578351835292840192918401916001016110d7565b50909695505050505050565b5f8060408385031215611110575f80fd5b823591506111206020840161106d565b90509250929050565b634e487b7160e01b5f52603260045260245ffd5b634e487b7160e01b5f52601160045260245ffd5b808201808211156111645761116461113d565b92915050565b818103818111156111645761116461113d565b6001600160801b0381811683821601908082111561119d5761119d61113d565b5092915050565b5f602082840312156111b4575f80fd5b81518015158114610c71575f80fd5b5f602082840312156111d3575f80fd5b5051919050565b6001600160401b0382811682821603908082111561119d5761119d61113d565b80820281158282048414176111645761116461113d565b5f8261122b57634e487b7160e01b5f52601260045260245ffd5b50049056fea264697066735822122095f68872196842ff2aefa3a6c0e76776f954d2f558f954a70c3bfe5d80867b1264736f6c63430008180033";
+const TOK_ABI = [
+  "function symbol() view returns (string)",
+  "function decimals() view returns (uint8)",
+  "function totalSupply() view returns (uint256)",
+  "function balanceOf(address) view returns (uint256)",
+  "function allowance(address,address) view returns (uint256)",
+  "function approve(address,uint256) returns (bool)"
+];
+let reader = new E.JsonRpcProvider(RPC);
+let signer = null, wallet = null, LOCKER = null, days = 7, tok = null;
+let busy = false;
+const $ = (id) => document.getElementById(id);
+const short = (a) => a ? a.slice(0, 6) + "…" + a.slice(-4) : "";
+const fmt = (n) => Number(n).toLocaleString(undefined, { maximumFractionDigits: 4 });
+
+async function oneAtATime(fn) {
+  if (busy) return;
+  busy = true;
+  document.querySelectorAll(".btn").forEach(b => b.disabled = true);
+  try { await fn(); } finally { busy = false; document.querySelectorAll(".btn").forEach(b => b.disabled = false); }
+}
+
+function waitForProvider(ms = 5000) {
+  if (window.ethereum) return Promise.resolve(true);
+  return new Promise((res) => {
+    const t0 = Date.now();
+    const iv = setInterval(() => {
+      if (window.ethereum) { clearInterval(iv); res(true); }
+      else if (Date.now() - t0 > ms) { clearInterval(iv); res(false); }
+    }, 120);
+  });
+}
+
+async function ensureChain() {
+  try {
+    const id = await window.ethereum.request({ method: "eth_chainId" });
+    if (parseInt(id, 16) === CHAIN) return true;
+    await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x" + CHAIN.toString(16) }] });
+  } catch (e) {
+    try {
+      await window.ethereum.request({ method: "wallet_addEthereumChain", params: [{
+        chainId: "0x" + CHAIN.toString(16), chainName: "Robinhood Chain",
+        nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+        rpcUrls: [RPC], blockExplorerUrls: ["https://robinhoodchain.blockscout.com"] }] });
+    } catch (e2) {}
+  }
+  return true;
+}
+
+async function connect() {
+  if (!(await waitForProvider())) { alert("no wallet found — install metamask"); return; }
+  await window.ethereum.request({ method: "eth_requestAccounts" });
+  await ensureChain();
+  const bp = new E.BrowserProvider(window.ethereum);
+  signer = await bp.getSigner();
+  wallet = await signer.getAddress();
+  $("connectBtn").textContent = short(wallet);
+  $("whoAmI").textContent = "connected: " + short(wallet);
+  loadMyLocks();
+  preview();
+}
+
+async function reconnect() {
+  if (!(await waitForProvider())) return;
+  try {
+    const a = await window.ethereum.request({ method: "eth_accounts" });
+    if (a && a.length) await connect();
+  } catch (e) {}
+}
+
+function setDays(d) {
+  days = d;
+  ["d7", "d30", "d90", "dc"].forEach(i => $(i).classList.remove("on"));
+  const m = { 7: "d7", 30: "d30", 90: "d90" }[d];
+  if (m) $(m).classList.add("on"); else $("dc").classList.add("on");
+  preview();
+}
+function customDays() {
+  const v = prompt("lock for how many days?", "14");
+  const n = Math.floor(Number(v));
+  if (!n || n < 1) return;
+  if (n > 3650) { alert("max 3650 days"); return; }
+  days = n;
+  ["d7", "d30", "d90"].forEach(i => $(i).classList.remove("on"));
+  $("dc").classList.add("on");
+  $("dc").textContent = n + " days";
+  preview();
+}
+
+async function onTok() {
+  const a = $("tokAddr").value.trim();
+  tok = null;
+  if (!E.isAddress(a)) { $("tokInfo").textContent = "paste the CA of the token you launched"; preview(); return; }
+  $("tokInfo").textContent = "reading token…";
+  try {
+    const c = new E.Contract(a, TOK_ABI, reader);
+    const [sym, dec, sup] = await Promise.all([c.symbol(), c.decimals(), c.totalSupply()]);
+    let bal = 0n;
+    if (wallet) { try { bal = await c.balanceOf(wallet); } catch (e) {} }
+    tok = { addr: a, sym, dec: Number(dec), sup, bal };
+    $("tokInfo").innerHTML = "<b>$" + sym + "</b> · your balance: " + fmt(E.formatUnits(bal, dec)) + " " + sym;
+  } catch (e) { $("tokInfo").textContent = "couldn't read that token — check the address"; }
+  preview();
+}
+
+function pct(p) {
+  if (!tok) { alert("paste a token address first"); return; }
+  if (!wallet) { alert("connect your wallet first"); return; }
+  const v = tok.bal * BigInt(p) / 100n;
+  $("amt").value = E.formatUnits(v, tok.dec);
+  preview();
+}
+
+function preview() {
+  const el = $("prev");
+  const v = parseFloat($("amt").value);
+  if (!tok || !v) { el.textContent = "pick a token and an amount"; return; }
+  const supPct = tok.sup > 0n ? (v / Number(E.formatUnits(tok.sup, tok.dec))) * 100 : 0;
+  const end = new Date(Date.now() + days * 86400000);
+  el.innerHTML = "🔒 locking <b>" + fmt(v) + " $" + tok.sym + "</b> (" + supPct.toFixed(2) + "% of supply)<br>" +
+    "vests linearly · fully unlocked <b>" + end.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) + "</b> (" + days + " days)<br>" +
+    "<span style='color:var(--faint)'>you can claim vested tokens any time · you can extend, never shorten</span>";
+}
+
+async function loadConfig() {
+  try {
+    const c = await (await fetch("/config")).json();
+    if (c.locker && E.isAddress(c.locker)) {
+      LOCKER = c.locker;
+      $("lockerAddr").innerHTML = "<a href='https://robinhoodchain.blockscout.com/address/" + LOCKER + "' target='_blank' rel='noopener'>" + short(LOCKER) + " ↗</a>";
+      $("setupCard").style.display = "none";
+      return;
+    }
+  } catch (e) {}
+  const saved = localStorage.getItem("robn-locker");
+  if (saved && E.isAddress(saved)) {
+    LOCKER = saved;
+    $("lockerAddr").textContent = short(LOCKER) + " (local only — add LOCKER_ADDRESS to railway)";
+    $("setupCard").style.display = "none";
+  } else {
+    $("setupCard").style.display = "block";
+    $("lockerAddr").textContent = "not deployed yet";
+  }
+}
+
+function doDeploy() { oneAtATime(_doDeploy); }
+async function _doDeploy() {
+  const st = $("dStatus");
+  try {
+    if (!wallet) await connect();
+    if (!wallet) return;
+    st.className = "status"; st.textContent = "confirm in wallet…";
+    const f = new E.ContractFactory(ABI, BYTECODE, signer);
+    const c = await f.deploy();
+    st.textContent = "deploying…";
+    await c.waitForDeployment();
+    const addr = await c.getAddress();
+    LOCKER = addr;
+    localStorage.setItem("robn-locker", addr);
+    st.className = "status ok";
+    st.innerHTML = "✅ deployed: " + addr + "<br><b>now add this to railway → variables:</b><br>LOCKER_ADDRESS = " + addr + "<br><span style='color:var(--faint)'>until you do, only this browser knows the address.</span>";
+    $("lockerAddr").textContent = short(addr);
+  } catch (e) { st.className = "status err"; st.textContent = e.shortMessage || e.message; }
+}
+
+function doLock() { oneAtATime(_doLock); }
+async function _doLock() {
+  const st = $("lStatus");
+  st.className = "status";
+  try {
+    if (!LOCKER) { st.className = "status err"; st.textContent = "no locker deployed yet"; return; }
+    if (!wallet) { await connect(); if (!wallet) return; }
+    await ensureChain();
+    if (!tok) { st.className = "status err"; st.textContent = "paste a token address first"; return; }
+    const v = parseFloat($("amt").value);
+    if (!v || v <= 0) { st.className = "status err"; st.textContent = "enter an amount"; return; }
+    const amt = E.parseUnits($("amt").value.trim(), tok.dec);
+    const c = new E.Contract(tok.addr, TOK_ABI, signer);
+    if (amt > tok.bal) { st.className = "status err"; st.textContent = "you don't hold that many " + tok.sym; return; }
+
+    st.textContent = "checking approval…";
+    const allow = await c.allowance(wallet, LOCKER);
+    if (allow < amt) {
+      st.textContent = "approve the locker — confirm in wallet…";
+      const a = await c.approve(LOCKER, E.MaxUint256);
+      st.textContent = "approving…";
+      await a.wait();
+    }
+    st.textContent = "confirm the lock in your wallet…";
+    const L = new E.Contract(LOCKER, ABI, signer);
+    const end = Math.floor(Date.now() / 1000) + days * 86400;
+    const tx = await L.lock(tok.addr, amt, end);
+    st.textContent = "locking…";
+    await tx.wait();
+    st.className = "status ok";
+    st.textContent = "🔒 locked " + fmt($("amt").value) + " $" + tok.sym + " for " + days + " days";
+    $("amt").value = "";
+    await onTok();
+    loadMyLocks();
+  } catch (e) { st.className = "status err"; st.textContent = e.shortMessage || e.message; }
+}
+
+async function loadMyLocks() {
+  const el = $("myLocks");
+  if (!wallet || !LOCKER) { el.innerHTML = "<div class='note' style='margin:0'>connect your wallet to see your locks</div>"; return; }
+  el.innerHTML = "<div class='note' style='margin:0'>loading…</div>";
+  try {
+    const L = new E.Contract(LOCKER, ABI, reader);
+    const ids = await L.idsByOwner(wallet);
+    if (!ids.length) { el.innerHTML = "<div class='note' style='margin:0'>no locks yet</div>"; return; }
+    const rows = [];
+    for (const id of ids) {
+      const l = await L.locks(id);
+      const [v, cl] = await Promise.all([L.vested(id), L.claimable(id)]);
+      let sym = "?", dec = 18;
+      try { const t = new E.Contract(l.token, TOK_ABI, reader); [sym, dec] = await Promise.all([t.symbol(), t.decimals().then(Number)]); } catch (e) {}
+      const pctV = l.total > 0n ? Number(v * 10000n / l.total) / 100 : 0;
+      const end = new Date(Number(l.end) * 1000);
+      const done = Date.now() > Number(l.end) * 1000;
+      rows.push(`<div class="lockRow">
+        <div class="flex"><b>$${sym}</b><span style="color:var(--faint)">${done ? "fully vested" : "unlocks " + end.toLocaleDateString()}</span></div>
+        <div class="bar"><i style="width:${pctV}%"></i></div>
+        <div class="flex" style="color:var(--faint)">
+          <span>locked ${fmt(E.formatUnits(l.total, dec))}</span><span>${pctV.toFixed(1)}% vested</span>
+        </div>
+        <div class="flex" style="margin-top:9px">
+          <span style="color:var(--mint)">claimable: ${fmt(E.formatUnits(cl, dec))}</span>
+          <span>
+            <button class="btn ghost" style="padding:7px 11px;font-size:12px" onclick="doExtend(${id})">Extend</button>
+            <button class="btn" style="padding:7px 11px;font-size:12px" onclick="doClaim(${id})" ${cl > 0n ? "" : "disabled"}>Claim</button>
+          </span>
+        </div>
+      </div>`);
+    }
+    el.innerHTML = rows.join("");
+  } catch (e) { el.innerHTML = "<div class='note' style='margin:0'>couldn't load locks: " + (e.shortMessage || e.message) + "</div>"; }
+}
+
+function doClaim(id) { oneAtATime(() => _doClaim(id)); }
+async function _doClaim(id) {
+  try {
+    if (!wallet) { await connect(); if (!wallet) return; }
+    await ensureChain();
+    const L = new E.Contract(LOCKER, ABI, signer);
+    const tx = await L.claim(id);
+    await tx.wait();
+    loadMyLocks();
+  } catch (e) { alert(e.shortMessage || e.message); }
+}
+
+function doExtend(id) { oneAtATime(() => _doExtend(id)); }
+async function _doExtend(id) {
+  try {
+    if (!wallet) { await connect(); if (!wallet) return; }
+    const more = prompt("extend this lock by how many extra days?", "7");
+    const n = Math.floor(Number(more));
+    if (!n || n < 1) return;
+    await ensureChain();
+    const L = new E.Contract(LOCKER, ABI, signer);
+    const l = await L.locks(id);
+    const newEnd = Number(l.end) + n * 86400;
+    const tx = await L.extend(id, newEnd);
+    await tx.wait();
+    loadMyLocks();
+  } catch (e) { alert(e.shortMessage || e.message); }
+}
+
+(async () => { await loadConfig(); reconnect(); })();
+</script>
+</body>
+</html>
