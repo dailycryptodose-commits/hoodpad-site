@@ -578,6 +578,20 @@ function pctCell(v) {
   const c = v >= 0 ? "var(--green)" : "var(--red)";
   return `<span style="color:${c}">${v >= 0 ? "+" : ""}${v.toFixed(1)}%</span>`;
 }
+function cleanPools(arr) {
+  const byToken = new Map();
+  for (const p of arr) {
+    const nm = (p.name || "").split("/")[0].trim();
+    if (STABLES.test(nm)) continue;                     // WETH/USDG/stables aren't memecoins
+    if (p.fdv && (p.fdv > 5e10 || p.fdv < 1)) p.fdv = null;  // glitched data
+    if (p.ch) for (const k of ["m5", "h1", "h6", "h24"]) { if (Math.abs(p.ch[k]) > 10000) p.ch[k] = null; }
+    const key = (p.token || nm).toLowerCase();
+    const prev = byToken.get(key);
+    if (!prev || (p.liq || 0) > (prev.liq || 0)) byToken.set(key, p); // dedupe: keep deepest pool
+  }
+  return [...byToken.values()];
+}
+
 function paintTrenches() {
   const el = $("trenchList"); if (!el || !trenchData) return;
   let list;
@@ -586,6 +600,7 @@ function paintTrenches() {
     const ids = new Set(hot.map((p) => p.pair));
     list = [...hot, ...(trenchData.top || []).filter((p) => !ids.has(p.pair))];
   } else list = [...(trenchData[trenchTab] || [])];
+  list = cleanPools(list);
   if (trenchMinLiq) list = list.filter((p) => (p.liq || 0) >= trenchMinLiq);
   if (trenchMinVol) list = list.filter((p) => (p.vol24 || 0) >= trenchMinVol);
   if (trenchSort.key) {
@@ -1446,9 +1461,9 @@ async function startSpotlight() {
 function spotPicks() {
   if (!trenchData) return [];
   const seen = new Set();
-  return [...(trenchData.trending || []), ...(trenchData.top || [])].filter((p) => {
+  return cleanPools([...(trenchData.trending || []), ...(trenchData.top || [])]).filter((p) => {
     const nm = (p.name || "").split("/")[0].trim();
-    if (STABLES.test(nm) || seen.has(nm) || !(p.vol24 > 0)) return false;
+    if (seen.has(nm) || !(p.vol24 > 0)) return false;
     seen.add(nm); return true;
   }).slice(0, 6);
 }
@@ -1509,11 +1524,11 @@ const STABLES = /^(USDG|USDC|USDT|DAI|WETH|ETH)\b/i;
 async function loadFeed() {
   try {
     try { trenchData = await (await fetch("/api/trenches")).json(); } catch (e) {}
-    const pool = [...((trenchData && trenchData.trending) || []), ...((trenchData && trenchData.top) || [])];
+    const pool = cleanPools([...((trenchData && trenchData.trending) || []), ...((trenchData && trenchData.top) || [])]);
     const seen = new Set();
     const picks = pool.filter((p) => {
       const nm = (p.name || "").split("/")[0].trim();
-      if (STABLES.test(nm) || seen.has(nm)) return false;
+      if (seen.has(nm)) return false;
       seen.add(nm); return true;
     }).slice(0, 15);
     if (!picks.length) { setTimeout(loadFeed, 5000); return; } // retry until the cache warms
