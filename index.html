@@ -280,7 +280,7 @@
   <div class="modal">
     <button class="closeX" onclick="closeModals()">✕</button>
     <div class="mTitle">Launch a token</div>
-    <div class="mSub">live in one transaction · <span style="white-space:nowrap">creation fee <span id="feeShow">…</span> ETH</span><br><span style="color:var(--green)">you earn 50% of every trade fee on your token — <span style="white-space:nowrap">forever</span></span></div>
+    <div class="mSub">live in one transaction · <span style="white-space:nowrap">creation fee <span id="feeShow">…</span> ETH</span><br><span style="color:var(--green)">you earn <span id="creatorPct">50</span>% of every trade fee on your token — <span style="white-space:nowrap">forever</span></span></div>
     <div class="field"><label>Name</label><input id="lName" placeholder="Sherwood" maxlength="32"></div>
     <div class="field"><label>Ticker</label><input id="lTick" placeholder="SHER" maxlength="10" style="text-transform:uppercase"></div>
     <div class="field"><label>Your first buy (ETH, optional)</label><input id="lBuy" placeholder="0.01" inputmode="decimal" oninput="quoteLaunchBuy()"></div>
@@ -368,6 +368,7 @@ const V3_ROUTER_ABI = [
 ];
 let FEE_WALLET = null; // platform fee recipient, read from pad (may be the vault)
 let PAD_OWNER = null;  // pad owner — stable identity for owner-only features
+let CREATOR_PCT = 50;  // 100 when the fee vault's global mode is on — copy follows the switch
 // exact-pool introspection: we trade the pool on the page, verified, or nothing
 const V2_PAIR_ABI = [
   "function token0() view returns (address)",
@@ -738,7 +739,7 @@ async function renderExternalToken(pair) {
       </div>
       <div class="rightCol" style="grid-area:trade">
         <div class="panel" id="xPanel"><div class="quote">checking swap support…</div></div>
-        <div class="panel"><div class="secLbl">🏹 robn.fun</div><div class="metaRow">launch your own token — earn 50% of every trade fee, forever.</div><a class="btn ghost" style="text-decoration:none;margin-top:10px;display:inline-block;font-size:12px" href="/">+ launch a token</a></div>
+        <div class="panel"><div class="secLbl">🏹 robn.fun</div><div class="metaRow">launch your own token — earn ${CREATOR_PCT}% of every trade fee, forever.</div><a class="btn ghost" style="text-decoration:none;margin-top:10px;display:inline-block;font-size:12px" href="/">+ launch a token</a></div>
       </div>
     </div></div>`;
   probeAndFillX(pair);
@@ -1068,7 +1069,7 @@ async function renderCreators() {
   $("statsView").innerHTML = `<div style="max-width:1000px;margin:0 auto">
     <a class="back" href="/">← all tokens</a>
     <div class="tpName" style="margin-bottom:4px">👑 Top Creators</div>
-    <div style="color:var(--faint);font-size:13px;margin-bottom:16px">launch on robn.fun → earn 50% of every trade fee, instantly, forever. this is what creators are making:</div>
+    <div style="color:var(--faint);font-size:13px;margin-bottom:16px">launch on robn.fun → earn ${CREATOR_PCT}% of every trade fee, instantly, forever. this is what creators are making:</div>
     <div class="panel" style="padding:8px 16px">
       ${d.creators.length ? d.creators.map((c, i) => `
         <div class="trade" style="display:grid;grid-template-columns:44px 1fr 1fr 1fr;gap:10px;align-items:center">
@@ -1149,6 +1150,13 @@ async function init() {
   try { MIGRATION_ETH = Number(E.formatEther(await pad.migrationEth())); } catch (e) {}
   try { FEE_WALLET = await pad.feeWallet(); } catch (e) {}
   try { PAD_OWNER = await pad.owner(); } catch (e) {}
+  try {
+    if (FEE_WALLET) {
+      const vault = new E.Contract(FEE_WALLET, ["function globalMode() view returns (bool)"], reader);
+      if (await vault.globalMode()) CREATOR_PCT = 100;
+    }
+  } catch (e) {} // feeWallet is a plain wallet → stays 50
+  const pctEl = $("creatorPct"); if (pctEl) pctEl.textContent = CREATOR_PCT;
   await loadTokens();
   if (pageToken) {
     document.getElementById("homeView").style.display = "none";
