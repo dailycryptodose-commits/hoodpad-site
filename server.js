@@ -773,6 +773,11 @@ app.get("/t/:token", (req, res) => {
       const img = t.meta && t.meta.image && t.meta.image.startsWith("/img/") ? "https://robn.fun" + t.meta.image : "https://robn.fun/logo.png";
       let html = indexHtml.replace(/<title>[^<]*<\/title>/, `<title>${title}</title>`);
       html = html.replace("</head>", `<meta property="og:title" content="${title}"><meta property="og:description" content="${desc}"><meta property="og:image" content="${img}"><meta name="twitter:card" content="summary"><meta name="twitter:title" content="${title}"><meta name="twitter:description" content="${desc}"><meta name="twitter:image" content="${img}"></head>`);
+      // set these HERE, not in middleware: the og-injection path bypasses sendIndex,
+      // so without them express guesses octet-stream (browser downloads the page) and
+      // the browser heuristically caches whatever it got.
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache, must-revalidate");
       return res.send(html);
     }
   } catch (e) {}
