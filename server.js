@@ -787,6 +787,23 @@ app.get("/creators", (req, res) => sendIndex(res, req));
 app.get("/vault-admin", (req, res) => res.sendFile(path.join(__dirname, "vault-admin.html")));
 app.get("/lock", (req, res) => res.sendFile(path.join(__dirname, "lock.html")));
 
+// portfolio: balances come from the Transfer index, cost basis from the trade index.
+// zero rpc calls — the client adds live prices, which it already has.
+app.get("/api/portfolio/:wallet", (req, res) => {
+  const w = String(req.params.wallet || "").toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(w)) return res.status(400).json({ error: "bad address" });
+  const bw = stats.basis[w] || {};
+  const out = [];
+  let realized = 0n;
+  for (const tk of (stats.tokenList || [])) {
+    const bal = (stats.holders[tk] && stats.holders[tk][w]) || "0";
+    const b = bw[tk] || { c: "0", q: "0", r: "0" };
+    realized += BigInt(b.r);
+    if (BigInt(bal) > 0n) out.push({ addr: tk, bal, cost: b.c, qty: b.q, realized: b.r });
+  }
+  res.json({ tokens: out, realized: realized.toString(), indexedTo: stats.lastBlock });
+});
+
 // ---- analytics indexer ----
 const STATS_FILE = path.join(DATA_DIR, "stats.json");
 let stats = { lastBlock: 0, vol: "0", fees: "0", buys: 0, sells: 0, launches: 0, migrations: 0, traders: {}, daily: {}, perToken: {}, traderVol: {}, creatorLaunches: {} };
@@ -800,6 +817,9 @@ if (stats.pad !== PAD) { // pad redeployed -> start stats fresh
 if (!stats.holders || !stats.tokenList) { // holders upgrade -> full reindex
   stats = { pad: PAD, lastBlock: 0, vol: "0", fees: "0", buys: 0, sells: 0, launches: 0, migrations: 0, traders: {}, daily: {}, perToken: {}, traderVol: {}, creatorLaunches: {}, holders: {}, tokenList: [], creatorOf: {} };
 }
+if (!stats.basis) { // p/l upgrade -> full reindex (a PARTIAL cost basis is worse than none: it lies)
+  stats = { pad: PAD, lastBlock: 0, vol: "0", fees: "0", buys: 0, sells: 0, launches: 0, migrations: 0, traders: {}, daily: {}, perToken: {}, traderVol: {}, creatorLaunches: {}, holders: {}, tokenList: [], creatorOf: {}, basis: {} };
+}
 const TRANSFER_TOPIC = ethers.id("Transfer(address,address,uint256)");
 
 const padIface = new ethers.Interface([
@@ -810,6 +830,35 @@ const padIface = new ethers.Interface([
 ]);
 
 function addWei(a, b) { return (BigInt(a) + b).toString(); }
+
+// ---- cost basis (rides the indexer that already reads every Buy/Sell) ----
+// c = eth spent on the tokens still held, q = tokens still held, r = realised p/l in wei.
+// weighted-average method: a sell retires cost proportional to the fraction sold.
+function basisOf(w, tk) {
+  w = String(w).toLowerCase(); tk = String(tk).toLowerCase();
+  if (!stats.basis[w]) {
+    if (Object.keys(stats.basis).length > 20000) return null; // memory guard
+    stats.basis[w] = {};
+  }
+  if (!stats.basis[w][tk]) stats.basis[w][tk] = { c: "0", q: "0", r: "0" };
+  return stats.basis[w][tk];
+}
+function basisBuy(w, tk, ethIn, tokensOut) {
+  const B = basisOf(w, tk); if (!B) return;
+  B.c = addWei(B.c, ethIn);
+  B.q = addWei(B.q, tokensOut);
+}
+function basisSell(w, tk, tokensIn, ethOut) {
+  const B = basisOf(w, tk); if (!B) return;
+  const q = BigInt(B.q), c = BigInt(B.c);
+  // tokens can arrive by transfer, not just by buying here — never retire more cost than exists
+  const sold = tokensIn > q ? q : tokensIn;
+  const soldCost = q > 0n ? (c * sold) / q : 0n;
+  B.r = addWei(B.r, ethOut - soldCost);   // negative = a realised loss, which is the truth
+  B.c = (c - soldCost).toString();
+  B.q = (q - sold).toString();
+  if (BigInt(B.q) === 0n) B.c = "0";
+}
 function pushT24(tok, wei) {
   const k = tok.toLowerCase();
   if (!stats.perToken[k]) stats.perToken[k] = { vol: "0", trades: 0 };
@@ -863,6 +912,7 @@ async function indexStats() {
           stats.daily[day] = addWei(stats.daily[day] || "0", p.args.ethIn);
           if (Object.keys(stats.traders).length < 100000) stats.traders[p.args.buyer.toLowerCase()] = 1;
           stats.traderVol[p.args.buyer.toLowerCase()] = addWei(stats.traderVol[p.args.buyer.toLowerCase()] || "0", p.args.ethIn);
+          basisBuy(p.args.buyer, p.args.token, p.args.ethIn, p.args.tokensOut);
           bump(p.args.token, p.args.ethIn);
           pushT24(p.args.token, p.args.ethIn);
         }
@@ -873,6 +923,7 @@ async function indexStats() {
           stats.daily[day] = addWei(stats.daily[day] || "0", p.args.ethOut);
           if (Object.keys(stats.traders).length < 100000) stats.traders[p.args.seller.toLowerCase()] = 1;
           stats.traderVol[p.args.seller.toLowerCase()] = addWei(stats.traderVol[p.args.seller.toLowerCase()] || "0", p.args.ethOut);
+          basisSell(p.args.seller, p.args.token, p.args.tokensIn, p.args.ethOut);
           bump(p.args.token, p.args.ethOut);
           pushT24(p.args.token, p.args.ethOut);
         }
