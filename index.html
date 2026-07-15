@@ -44,7 +44,7 @@
   .btn:disabled{opacity:.5;cursor:default}
 
   .feed{display:flex;overflow:hidden;white-space:nowrap;padding:9px 0;border-bottom:1px solid var(--line);font-family:'JetBrains Mono';font-size:11.5px;color:var(--dim)}
-  .feedInner{display:flex;gap:28px;animation:mq 30s linear infinite;padding-left:100%}
+  .feedInner{display:flex;gap:34px;animation:mq 45s linear infinite;padding-left:0;white-space:nowrap;font-size:13.5px;align-items:center}
   @keyframes mq{from{transform:translateX(0)}to{transform:translateX(-100%)}}
   .buyC{color:var(--green)}.sellC{color:var(--red)}
   .airdrop{display:block;text-align:center;padding:10px 16px;font-size:13px;color:#0A1403;text-decoration:none;font-weight:600;
@@ -930,7 +930,6 @@ async function init() {
     renderTokenPage();
     setInterval(async () => { await loadTokens(); renderTokenPage(true); }, 20000);
   } else if (trenchPage) {
-    loadFeed();
     renderTrenches();
   } else if (xPair) {
     renderExternalToken(xPair);
@@ -941,10 +940,10 @@ async function init() {
     renderSeason();
     setInterval(renderSeason, 30000);
   } else {
-    loadFeed();
     setInterval(loadTokens, 20000);
     watchNewTokens();
   }
+  loadFeed(); // trending ticker on every page
   setInterval(ethPrice, 60000);
 }
 
@@ -1504,21 +1503,25 @@ async function watchNewTokens() {
 const STABLES = /^(USDG|USDC|USDT|DAI|WETH|ETH)\b/i;
 async function loadFeed() {
   try {
-    if (!trenchData) trenchData = await (await fetch("/api/trenches")).json();
-    const pool = [...(trenchData.trending || []), ...(trenchData.top || [])];
+    try { trenchData = await (await fetch("/api/trenches")).json(); } catch (e) {}
+    const pool = [...((trenchData && trenchData.trending) || []), ...((trenchData && trenchData.top) || [])];
     const seen = new Set();
     const picks = pool.filter((p) => {
       const nm = (p.name || "").split("/")[0].trim();
       if (STABLES.test(nm) || seen.has(nm)) return false;
       seen.add(nm); return true;
     }).slice(0, 15);
-    if (!picks.length) return;
-    $("feed").style.display = "flex";
-    $("feedInner").innerHTML = picks.map((p) => {
+    if (!picks.length) { setTimeout(loadFeed, 5000); return; } // retry until the cache warms
+    const items = picks.map((p, i) => {
       const ch = (p.ch && p.ch.h24) || 0;
       const col = ch >= 0 ? "var(--green)" : "var(--red)";
-      return `<a href="/x/${p.pair}" style="text-decoration:none;color:inherit">🔥 <b>${p.name.split("/")[0].trim()}</b> <span style="color:${col}">${ch >= 0 ? "+" : ""}${ch.toFixed(1)}%</span></a>`;
+      const nm = p.name.split("/")[0].trim();
+      return `<a href="/x/${p.pair}" style="text-decoration:none;color:inherit;display:inline-flex;align-items:center;gap:6px">
+        <span style="color:var(--faint);font-weight:700">#${i + 1}</span>${i < 3 ? "🔥" : ""}<b>${nm}</b>
+        <span style="color:${col};font-weight:700">${ch >= 0 ? "+" : ""}${ch.toFixed(1)}%</span></a>`;
     }).join("");
+    $("feed").style.display = "flex";
+    $("feedInner").innerHTML = items + items; // doubled for a seamless loop
   } catch (e) {}
 }
 setInterval(loadFeed, 60000);
