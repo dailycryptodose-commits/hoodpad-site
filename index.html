@@ -150,6 +150,20 @@
   .metaRow b{color:var(--green);font-weight:700}
   .lockBadge{display:inline-block;font-family:'JetBrains Mono';font-size:10px;font-weight:700;letter-spacing:.03em;padding:4px 9px;border-radius:7px;background:rgba(95,190,18,.12);color:#8FD64A;border:1px solid rgba(95,190,18,.35);vertical-align:middle}
   .lockBadge.alt{background:rgba(155,175,148,.10);color:var(--dim);border-color:var(--line2)}
+  #pnlPill{font-family:'JetBrains Mono';font-size:12px}
+  #pnlPill.up{border-color:rgba(95,190,18,.45);background:rgba(95,190,18,.10);color:#8FD64A}
+  #pnlPill.down{border-color:rgba(255,107,107,.4);background:rgba(255,107,107,.08);color:#FF6B6B}
+  #portPanel{position:absolute;top:64px;right:18px;width:440px;max-width:calc(100vw - 24px);background:var(--panel);border:1px solid var(--line2);border-radius:14px;padding:16px;z-index:60;box-shadow:0 18px 50px rgba(0,0,0,.5)}
+  .portHead{display:flex;justify-content:space-between;align-items:flex-end;padding-bottom:12px;border-bottom:1px solid var(--line2)}
+  .portLbl{font-size:10px;letter-spacing:1.5px;color:var(--faint);text-transform:uppercase}
+  .portBig{font-family:'JetBrains Mono';font-size:21px;color:var(--txt);margin-top:3px}
+  .portCols{display:grid;grid-template-columns:1.4fr 1fr 1fr 1.1fr;gap:8px;font-size:9.5px;letter-spacing:.8px;color:var(--faint);text-transform:uppercase;padding:10px 0 6px}
+  .portRow{display:grid;grid-template-columns:1.4fr 1fr 1fr 1.1fr;gap:8px;align-items:center;padding:9px 0;border-top:1px solid var(--line);font-family:'JetBrains Mono';font-size:12px;cursor:pointer}
+  .portRow:hover{background:rgba(255,255,255,.02)}
+  .portRow .up{color:#8FD64A} .portRow .down{color:#FF6B6B}
+  .portFoot{display:flex;justify-content:space-between;padding-top:11px;margin-top:3px;border-top:1px solid var(--line2);font-family:'JetBrains Mono';font-size:11px;color:var(--faint)}
+  .portFoot .up{color:#8FD64A} .portFoot .down{color:#FF6B6B}
+  .portEmpty{color:var(--faint);font-size:12.5px;padding:16px 0;text-align:center}
   .mcapBig{text-align:right}
   .mcapBig .lbl{font-size:10.5px;letter-spacing:2px;color:var(--faint);text-transform:uppercase}
   .mcapBig .val{font-family:'JetBrains Mono';font-weight:700;font-size:30px;color:var(--green)}
@@ -225,9 +239,11 @@
     <input id="searchBar" class="search" style="width:100%" placeholder="search name, ticker, or paste CA…" oninput="doSearch(this.value)" onkeydown="if(event.key==='Enter')searchGo(this.value)">
     <div id="searchResults" style="display:none;position:absolute;top:calc(100% + 6px);left:0;right:0;background:var(--panel);border:1px solid var(--line2);border-radius:14px;overflow:hidden;z-index:40;box-shadow:0 12px 30px rgba(0,0,0,.45)"></div>
   </div>
+  <div id="portPanel" style="display:none"></div>
   <div class="navBtns">
     <a href="/creators" class="btn ghost" style="text-decoration:none" title="top creators">👑</a>
     <a href="/lock" class="btn ghost" style="text-decoration:none" title="lock your creator bag">🔒</a>
+    <a href="#" class="btn ghost" id="pnlPill" onclick="togglePortfolio(event)" style="text-decoration:none;display:none" title="your bags"></a>
     <a href="/trenches" class="btn ghost" style="text-decoration:none">Trenches</a>
     <a href="https://relay.link/bridge/robinhood" target="_blank" rel="noopener" class="btn ghost" style="text-decoration:none">Bridge</a>
     <a href="/analytics" class="btn ghost" style="text-decoration:none">Analytics</a>
@@ -1714,6 +1730,80 @@ async function loadLockBadgeX(tokenAddr) {
   } catch (e) {}
 }
 
+// ---- 💼 portfolio + p/l ----
+// balances and cost basis both come from /api/portfolio (server-indexed, zero rpc here).
+// prices come from tokens[], which this page already has. cash = the wallet's own eth.
+let portOpen = false, portRows = [], portCash = 0, portRealized = 0;
+const fmtAmt = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : n.toFixed(0);
+const signed = (v) => (v >= 0 ? "+" : "−") + fmtUsd(Math.abs(v));
+
+async function loadPortfolio() {
+  const pill = $("pnlPill");
+  if (!wallet) { if (pill) pill.style.display = "none"; return; }
+  try {
+    const [d, bal] = await Promise.all([
+      fetch("/api/portfolio/" + wallet).then((r) => r.json()),
+      reader.getBalance(wallet).catch(() => 0n),
+    ]);
+    portCash = Number(E.formatEther(bal)) * ethUsd;
+    portRealized = Number(E.formatEther(d.realized || "0")) * ethUsd;
+    portRows = [];
+    for (const p of (d.tokens || [])) {
+      const t = tokens.find((x) => x.addr.toLowerCase() === p.addr.toLowerCase());
+      if (!t) continue;
+      const held = Number(E.formatEther(p.bal));
+      const val = held * t.priceEth * ethUsd;
+      if (val < 1) continue;                       // under a dollar isn't a position, it's dust
+      const cost = Number(E.formatEther(p.cost)) * ethUsd;
+      portRows.push({ t, held, val, cost, pl: val - cost, pct: cost > 0 ? ((val - cost) / cost) * 100 : 0 });
+    }
+    portRows.sort((a, b) => b.val - a.val);
+    paintPill();
+    if (portOpen) paintPortfolio();
+  } catch (e) {}
+}
+
+function paintPill() {
+  const el = $("pnlPill"); if (!el) return;
+  if (!wallet || !portRows.length) { el.style.display = "none"; return; }
+  const pl = portRows.reduce((s, r) => s + r.pl, 0);
+  el.style.display = "";
+  el.className = "btn ghost " + (pl >= 0 ? "up" : "down");
+  el.textContent = "💼 " + signed(pl) + (pl >= 0 ? " ▴" : " ▾");
+}
+
+function paintPortfolio() {
+  const el = $("portPanel"); if (!el) return;
+  const totVal = portRows.reduce((s, r) => s + r.val, 0);
+  el.innerHTML = `
+    <div class="portHead">
+      <div><div class="portLbl">your bags</div><div class="portBig">${fmtUsd(totVal)}</div></div>
+      <div style="text-align:right"><div class="portLbl">cash in wallet</div><div class="portBig">${fmtUsd(portCash)}</div></div>
+    </div>
+    ${portRows.length ? `<div class="portCols"><span>token</span><span style="text-align:right">holding</span><span style="text-align:right">value</span><span style="text-align:right">p/l</span></div>` +
+      portRows.map((r) => `<div class="portRow" onclick="location.href='/t/${r.t.addr}'">
+        <span style="color:var(--txt)">$${r.t.symbol}</span>
+        <span style="text-align:right;color:var(--dim)">${fmtAmt(r.held)}</span>
+        <span style="text-align:right;color:var(--txt)">${fmtUsd(r.val)}</span>
+        <span style="text-align:right" class="${r.pl >= 0 ? "up" : "down"}">${signed(r.pl)}<br><span style="font-size:10px">${(r.pct >= 0 ? "+" : "−") + Math.abs(r.pct).toFixed(1)}%</span></span>
+      </div>`).join("")
+    : `<div class="portEmpty">nothing over $1 yet</div>`}
+    ${portRealized !== 0 ? `<div class="portFoot"><span>realised all-time</span><span class="${portRealized >= 0 ? "up" : "down"}">${signed(portRealized)}</span></div>` : ""}`;
+}
+
+function togglePortfolio(e) {
+  if (e) e.preventDefault();
+  portOpen = !portOpen;
+  const el = $("portPanel");
+  if (el) el.style.display = portOpen ? "block" : "none";
+  if (portOpen) { paintPortfolio(); loadPortfolio(); }
+}
+document.addEventListener("click", (e) => {   // click-away closes it
+  if (!portOpen) return;
+  const p = $("portPanel"), pill = $("pnlPill");
+  if (p && !p.contains(e.target) && pill && !pill.contains(e.target)) togglePortfolio();
+});
+
 let live = null; // 60fps time-scrolling chart
 
 async function drawChart(t) {
@@ -2189,6 +2279,7 @@ async function connect() {
   wallet = await signer.getAddress();
   $("connectBtn").textContent = short(wallet);
   if (pageToken && currentToken) fillTradePanel(currentToken);
+  loadPortfolio();
 }
 async function ensureChain() {
   if (!window.ethereum) return true; // turbo/rpc paths don't go through the wallet
