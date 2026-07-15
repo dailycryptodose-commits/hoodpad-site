@@ -580,7 +580,12 @@ function pctCell(v) {
 }
 function paintTrenches() {
   const el = $("trenchList"); if (!el || !trenchData) return;
-  let list = [...(trenchData[trenchTab] || [])];
+  let list;
+  if (trenchTab === "trending") {
+    const hot = trenchData.trending || [];
+    const ids = new Set(hot.map((p) => p.pair));
+    list = [...hot, ...(trenchData.top || []).filter((p) => !ids.has(p.pair))];
+  } else list = [...(trenchData[trenchTab] || [])];
   if (trenchMinLiq) list = list.filter((p) => (p.liq || 0) >= trenchMinLiq);
   if (trenchMinVol) list = list.filter((p) => (p.vol24 || 0) >= trenchMinVol);
   if (trenchSort.key) {

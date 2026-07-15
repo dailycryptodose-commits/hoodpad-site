@@ -162,15 +162,16 @@ async function warmTrenches() {
   try {
     const get = (u) => fetch(u, { headers: { accept: "application/json" } }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
     const clean = (j) => (j && j.data ? j.data.map(mapPool).filter(Boolean) : []);
-    const [tr, t1, t2, t3, t4, t5, n1, n2] = await Promise.all([
+    const pages = await Promise.all([
       get(GT + "/trending_pools"),
-      ...[1, 2, 3, 4, 5].map((p) => get(GT + "/pools?sort=h24_volume_usd_desc&page=" + p)),
-      get(GT + "/new_pools?page=1"), get(GT + "/new_pools?page=2"),
+      ...[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((p) => get(GT + "/pools?sort=h24_volume_usd_desc&page=" + p)),
+      ...[1, 2, 3].map((p) => get(GT + "/new_pools?page=" + p)),
     ]);
+    const tr = pages[0];
     const seen = new Set();
-    const top = [...clean(t1), ...clean(t2), ...clean(t3), ...clean(t4), ...clean(t5)].filter((p) => !seen.has(p.pair) && seen.add(p.pair));
+    const top = pages.slice(1, 11).flatMap(clean).filter((p) => !seen.has(p.pair) && seen.add(p.pair));
     const seen2 = new Set();
-    const fresh = [...clean(n1), ...clean(n2)].filter((p) => !seen2.has(p.pair) && seen2.add(p.pair));
+    const fresh = pages.slice(11).flatMap(clean).filter((p) => !seen2.has(p.pair) && seen2.add(p.pair));
     const data = { ts: Date.now(), trending: clean(tr), top, fresh };
     if (data.trending.length || data.top.length || data.fresh.length) trenchCache = { ts: Date.now(), data };
   } catch (e) {}
