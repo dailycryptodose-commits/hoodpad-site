@@ -134,19 +134,23 @@ setInterval(fastWatch, 2500);
 
 // (chain trade watcher removed — ticker covers chain activity now)
 
-// ================= FeeVault auto-claimer =================
-// pays VIP creators automatically. uses a self-generated throwaway wallet
-// (only powers: trigger claim() = pay creators, spend its own gas dust).
-const VAULT_ADDR = process.env.VAULT_ADDRESS || "0xab27fC0DB0cD4f9fE4aA59D5934522fe6E1Cc8E0";
+// ================= FeeVault auto-payer =================
+// pays creators automatically. finds the vault by asking the pad where fees go,
+// so a redeployed vault needs zero config. uses a throwaway bot wallet whose only
+// powers are: trigger sync/claim (money can only reach creators) + spend own gas.
 const VAULT_ABI2 = [
   "function owed(address token) view returns (uint256)",
   "function claim(address token)",
+  "function sync(address token)",
+  "function synced(address token) view returns (bool)",
+  "function eligible(address token) view returns (bool)",
+  "function globalMode() view returns (bool)",
   "function vipToken(address) view returns (bool)",
   "event VIPAdded(address indexed token, uint256 baseline)",
   "event VIPRemoved(address indexed token)",
 ];
 const BOT_FILE = path.join(DATA_DIR, "claimbot.json");
-let claimBot = null, vipSet = new Set(), vipScanned = 0, botLowWarned = false;
+let claimBot = null, vipSet = new Set(), vipScanned = 0, botLowWarned = false, botVault = null;
 
 function loadClaimBot() {
   try {
@@ -160,64 +164,86 @@ function loadClaimBot() {
     claimBot = new ethers.Wallet(st.key, provider);
     vipSet = new Set(st.vips || []);
     vipScanned = st.lastBlock || 0;
-    console.log("🤖 claim bot wallet:", claimBot.address, "— fund it with ~0.002 ETH for gas (one time)");
-  } catch (e) { console.log("claim bot init failed:", e.message); }
+    console.log("🤖 fee bot wallet:", claimBot.address, "— fund it with ~0.002 ETH for gas (one time)");
+  } catch (e) { console.log("fee bot init failed:", e.message); }
 }
-
 function saveClaimBot() {
   try { fs.writeFileSync(BOT_FILE, JSON.stringify({ key: claimBot.privateKey, lastBlock: vipScanned, vips: [...vipSet] })); } catch (e) {}
 }
 
-async function scanVIPs() {
-  const vault = new ethers.Contract(VAULT_ADDR, VAULT_ABI2, provider);
+// the pad's feeWallet IS the vault (if it's a vault at all)
+async function findVault() {
+  try {
+    const fw = await pad.feeWallet();
+    if (botVault && botVault.addr.toLowerCase() === fw.toLowerCase()) return botVault;
+    const c = new ethers.Contract(fw, VAULT_ABI2, claimBot);
+    await c.globalMode(); // throws if feeWallet is a plain wallet
+    botVault = { addr: fw, c };
+    vipSet = new Set(); vipScanned = 0; // new vault: rescan
+    console.log("🤖 vault detected at", fw);
+    return botVault;
+  } catch (e) { botVault = null; return null; }
+}
+
+async function scanVIPs(vault) {
   const latest = await provider.getBlockNumber();
-  if (!vipScanned) vipScanned = Math.max(0, latest - 40000); // vault deployed today; generous lookback
+  if (!vipScanned) vipScanned = Math.max(0, latest - 40000);
   let from = vipScanned + 1;
   while (from <= latest) {
     const to = Math.min(from + 9000, latest);
     try {
       const [adds, rems] = await Promise.all([
-        vault.queryFilter(vault.filters.VIPAdded(), from, to),
-        vault.queryFilter(vault.filters.VIPRemoved(), from, to),
+        vault.c.queryFilter(vault.c.filters.VIPAdded(), from, to),
+        vault.c.queryFilter(vault.c.filters.VIPRemoved(), from, to),
       ]);
       const evs = [...adds.map((e) => ({ b: e.blockNumber, i: e.index, t: e.args.token.toLowerCase(), add: true })),
                    ...rems.map((e) => ({ b: e.blockNumber, i: e.index, t: e.args.token.toLowerCase(), add: false }))]
         .sort((a, b) => a.b - b.b || a.i - b.i);
       for (const ev of evs) { if (ev.add) vipSet.add(ev.t); else vipSet.delete(ev.t); }
       vipScanned = to;
-    } catch (e) { break; } // rpc hiccup: resume next cycle from vipScanned
+    } catch (e) { break; }
     from = to + 1;
   }
   saveClaimBot();
 }
 
-async function autoClaim() {
+async function autoPay() {
   try {
     if (!claimBot) return;
-    await scanVIPs();
-    if (!vipSet.size) return;
+    const vault = await findVault();
+    if (!vault) return; // fees go straight to his wallet — nothing to do
+    const isGlobal = await vault.c.globalMode();
+    await scanVIPs(vault);
+    const targets = isGlobal
+      ? (tokenCache.tokens || []).map((t) => t.addr.toLowerCase())
+      : [...vipSet];
+    if (!targets.length) return;
     const bal = await provider.getBalance(claimBot.address);
     if (bal < ethers.parseEther("0.0002")) {
-      if (!botLowWarned) { console.log("🤖 claim bot out of gas — send ~0.002 ETH to", claimBot.address); botLowWarned = true; }
+      if (!botLowWarned) { console.log("🤖 fee bot out of gas — send ~0.002 ETH to", claimBot.address); botLowWarned = true; }
       return;
     }
     botLowWarned = false;
-    const vault = new ethers.Contract(VAULT_ADDR, VAULT_ABI2, claimBot);
-    for (const tok of vipSet) {
+    for (const tok of targets) {
       try {
-        const owed = await vault.owed(tok);
+        if (!(await vault.c.eligible(tok))) continue;
+        if (!(await vault.c.synced(tok))) {
+          const tx = await vault.c.sync(tok); await tx.wait();
+          console.log("🤖 synced baseline for", tok);
+          continue; // pay from the next cycle
+        }
+        const owed = await vault.c.owed(tok);
         if (owed >= ethers.parseEther("0.00005")) {
-          const tx = await vault.claim(tok);
-          await tx.wait();
-          console.log("🤖 auto-claimed", ethers.formatEther(owed), "ETH for VIP token", tok);
+          const tx = await vault.c.claim(tok); await tx.wait();
+          console.log("🤖 paid", ethers.formatEther(owed), "ETH to the creator of", tok);
         }
       } catch (e) {}
     }
   } catch (e) {}
 }
 loadClaimBot();
-setInterval(autoClaim, 5 * 60 * 1000);
-setTimeout(autoClaim, 20 * 1000); // first pass shortly after boot
+setInterval(autoPay, 5 * 60 * 1000);
+setTimeout(autoPay, 20 * 1000);
 // ===========================================================
 
 // keep the pool list warm: gentle sequential fetches, timeouts, ~9 req/cycle
