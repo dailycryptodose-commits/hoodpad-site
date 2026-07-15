@@ -499,15 +499,18 @@ function paintTrenches() {
   const el = $("trenchList"); if (!el || !trenchData) return;
   const list = trenchData[trenchTab] || [];
   if (!list.length) { el.innerHTML = `<div style="color:var(--faint);padding:20px 0;font-size:13px">nothing here yet — the trenches are quiet</div>`; return; }
+  const COLS = "grid-template-columns:2fr 1fr .8fr .8fr .8fr 1fr 1fr";
+  const num = (s) => `<span style="font-family:'JetBrains Mono';font-size:12px;text-align:right">${s}</span>`;
   el.innerHTML = `
-    <div class="trade" style="color:var(--faint);font-size:10.5px;text-transform:uppercase;letter-spacing:1px"><span>token</span><span>price</span><span>5m</span><span>1h</span><span>24h</span><span>24h vol</span><span>liquidity</span></div>
+    <div style="display:grid;${COLS};gap:8px;padding:10px 0;border-bottom:1px solid var(--line);color:var(--faint);font-size:10.5px;text-transform:uppercase;letter-spacing:1px">
+      <span>token</span><span style="text-align:right">mcap</span><span style="text-align:right">5m</span><span style="text-align:right">1h</span><span style="text-align:right">24h</span><span style="text-align:right">24h vol</span><span style="text-align:right">liquidity</span>
+    </div>
     ${list.slice(0, 30).map((p) => `
-      <a class="trade" href="/x/${p.pair}" style="text-decoration:none;color:inherit;display:grid;grid-template-columns:2fr 1fr .7fr .7fr .7fr 1fr 1fr;gap:8px;align-items:center">
+      <a href="/x/${p.pair}" style="text-decoration:none;color:inherit;display:grid;${COLS};gap:8px;align-items:center;padding:11px 0;border-bottom:1px solid var(--line)">
         <span style="font-weight:600">${(p.name || "?").split("/")[0].trim()}</span>
-        <span style="font-family:'JetBrains Mono';font-size:12px">$${p.priceUsd < 0.001 ? p.priceUsd.toExponential(2) : p.priceUsd.toFixed(5)}</span>
-        ${pctCell(p.ch.m5)}${pctCell(p.ch.h1)}${pctCell(p.ch.h24)}
-        <span style="font-family:'JetBrains Mono';font-size:12px">${fmtUsd(p.vol24 || 0)}</span>
-        <span style="font-family:'JetBrains Mono';font-size:12px">${fmtUsd(p.liq || 0)}</span>
+        ${num(p.fdv ? fmtUsd(p.fdv) : "—")}
+        <span style="text-align:right">${pctCell(p.ch.m5)}</span><span style="text-align:right">${pctCell(p.ch.h1)}</span><span style="text-align:right">${pctCell(p.ch.h24)}</span>
+        ${num(fmtUsd(p.vol24 || 0))}${num(fmtUsd(p.liq || 0))}
       </a>`).join("")}`;
   document.querySelectorAll(".tabBtn").forEach((b) => b.classList.toggle("on", b.dataset.tab === trenchTab));
 }
