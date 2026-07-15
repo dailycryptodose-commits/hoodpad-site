@@ -132,6 +132,31 @@ async function fastWatch() {
 }
 setInterval(fastWatch, 2500);
 
+// chain-wide trade feed: watch the top pools' real trades, push to browsers
+let xtSeen = new Set();
+async function watchChainTrades() {
+  try {
+    if (!trenchCache.data) return;
+    const pools = [...(trenchCache.data.top || []), ...(trenchCache.data.trending || [])].slice(0, 5);
+    for (const p of pools) {
+      const j = await fetch(GT + "/pools/" + p.pair + "/trades", { headers: { accept: "application/json" } })
+        .then((r) => (r.ok ? r.json() : null)).catch(() => null);
+      if (!j || !j.data) continue;
+      for (const t of j.data.slice(0, 12)) {
+        const a = t.attributes || {};
+        const id = t.id || a.tx_hash;
+        if (!id || xtSeen.has(id)) continue;
+        xtSeen.add(id);
+        const ts = new Date(a.block_timestamp).getTime();
+        if (!ts || ts < Date.now() - 150_000) continue; // only fresh trades
+        broadcast({ t: "xtrade", name: (p.name || "?").split("/")[0].trim(), side: a.kind === "sell" ? "sell" : "buy", usd: Number(a.volume_in_usd) || 0 });
+      }
+    }
+    if (xtSeen.size > 3000) xtSeen = new Set([...xtSeen].slice(-1200));
+  } catch (e) {}
+}
+setInterval(watchChainTrades, 30000);
+
 const port = process.env.PORT || 3000;
 server.listen(port, () => console.log("hoodpad site running on " + port));
 

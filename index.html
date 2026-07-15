@@ -421,7 +421,27 @@ function connectLive() {
   } catch (e) { setTimeout(connectLive, 5000); }
 }
 
+let xtQueue = [], xtTimer = null;
+function queueXToast(msg) {
+  xtQueue.push(msg);
+  if (xtQueue.length > 6) xtQueue = xtQueue.slice(-6);
+  if (!xtTimer) {
+    xtTimer = setInterval(() => {
+      const m = xtQueue.shift();
+      if (m) toast(m);
+      else { clearInterval(xtTimer); xtTimer = null; }
+    }, 4500);
+  }
+}
+
 function handleLive(m) {
+  if (m.t === "xtrade") {
+    if (m.usd >= 100) { // skip dust so it stays classy
+      const amt = m.usd >= 1000 ? "$" + (m.usd / 1000).toFixed(1) + "K" : "$" + m.usd.toFixed(0);
+      queueXToast(`${m.side === "buy" ? "🟢" : "🔴"} ${m.side} ${amt} · ${m.name}`);
+    }
+    return;
+  }
   if (m.t === "created") {
     toast(`🏹 $${m.symbol} just launched!`);
     if (!pageToken && !statsPage && !seasonPage) loadTokens();
