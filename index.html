@@ -210,6 +210,7 @@
     <div id="searchResults" style="display:none;position:absolute;top:calc(100% + 6px);left:0;right:0;background:var(--panel);border:1px solid var(--line2);border-radius:14px;overflow:hidden;z-index:40;box-shadow:0 12px 30px rgba(0,0,0,.45)"></div>
   </div>
   <div class="navBtns">
+    <a href="/creators" class="btn ghost" style="text-decoration:none" title="top creators">👑</a>
     <a href="/trenches" class="btn ghost" style="text-decoration:none">Trenches</a>
     <a href="https://relay.link/bridge/robinhood" target="_blank" rel="noopener" class="btn ghost" style="text-decoration:none">Bridge</a>
     <a href="/analytics" class="btn ghost" style="text-decoration:none">Analytics</a>
@@ -325,8 +326,10 @@ const PAD_ABI = [
   "function creationFee() view returns (uint)",
   "function virtualEth() view returns (uint)",
   "function migrationEth() view returns (uint)",
+  "function feeWallet() view returns (address)",
   "function buyFeeBps() view returns (uint16)",
   "function migrationEth() view returns (uint)",
+  "function feeWallet() view returns (address)",
   "function createToken(string, string, bytes32) payable returns (address)",
   "function tokenInitHash(string, string, address) view returns (bytes32)",
   "function buy(address) payable",
@@ -358,7 +361,10 @@ const V3_ROUTER_ABI = [
   "function exactInputSingle((address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 amountIn,uint256 amountOutMinimum,uint160 sqrtPriceLimitX96) params) payable returns (uint256)",
   "function multicall(bytes[] data) payable returns (bytes[])",
   "function unwrapWETH9(uint256 amountMinimum, address recipient) payable",
+  "function unwrapWETH9WithFee(uint256 amountMinimum, address recipient, uint256 feeBips, address feeRecipient) payable",
+  "function sweepTokenWithFee(address token, uint256 amountMinimum, address recipient, uint256 feeBips, address feeRecipient) payable",
 ];
+let FEE_WALLET = null; // platform fee recipient, read from pad
 const WETH_ADDR = "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73";
 const ROUTER_ABI = [
   "function getAmountsOut(uint amountIn, address[] path) view returns (uint[] amounts)",
@@ -435,6 +441,33 @@ function connectLive() {
   } catch (e) { setTimeout(connectLive, 5000); }
 }
 
+function confetti() {
+  const c = document.createElement("canvas");
+  c.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:999";
+  c.width = innerWidth; c.height = innerHeight;
+  document.body.appendChild(c);
+  const ctx = c.getContext("2d");
+  const cols = ["#5FBE12", "#CBEF8F", "#3B7F0C", "#FFD24A", "#FFFFFF"];
+  const ps = Array.from({ length: 130 }, () => ({
+    x: innerWidth / 2 + (Math.random() - 0.5) * 200, y: innerHeight * 0.35,
+    vx: (Math.random() - 0.5) * 14, vy: -Math.random() * 13 - 4,
+    s: 4 + Math.random() * 5, r: Math.random() * Math.PI, vr: (Math.random() - 0.5) * 0.3,
+    col: cols[(Math.random() * cols.length) | 0],
+  }));
+  let frames = 0;
+  (function tick() {
+    ctx.clearRect(0, 0, c.width, c.height);
+    for (const p of ps) {
+      p.x += p.vx; p.y += p.vy; p.vy += 0.35; p.r += p.vr;
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.r);
+      ctx.fillStyle = p.col; ctx.fillRect(-p.s / 2, -p.s / 2, p.s, p.s * 0.6);
+      ctx.restore();
+    }
+    if (++frames < 140) requestAnimationFrame(tick);
+    else c.remove();
+  })();
+}
+
 let xtQueue = [], xtTimer = null;
 function queueXToast(msg) {
   xtQueue.push(msg);
@@ -457,6 +490,7 @@ function handleLive(m) {
   }
   if (m.t === "migrated") {
     toast("🎓 a token just graduated to uniswap!");
+    confetti();
     loadTokens();
     return;
   }
@@ -505,6 +539,7 @@ const pageToken = pagePath ? pagePath[1] : null;
 const statsPage = location.pathname === "/analytics";
 const seasonPage = location.pathname === "/season";
 const trenchPage = location.pathname === "/trenches";
+const creatorsPage = location.pathname === "/creators";
 const xMatch = location.pathname.match(/^\/x\/(0x[a-fA-F0-9]{40})/);
 const xPair = xMatch ? xMatch[1] : null;
 
@@ -897,10 +932,19 @@ async function doSwapX() {
       const r3 = new E.Contract(V3_ROUTER, V3_ROUTER_ABI, s);
       if (buying) {
         st.textContent = useTurbo ? "⚡ buying…" : "confirm in wallet…";
-        const tx = await r3.exactInputSingle(
-          { tokenIn: WETH_ADDR, tokenOut: xTok.token, fee: xV3Fee, recipient: to, amountIn, amountOutMinimum: minOut, sqrtPriceLimitX96: 0 },
-          { value: amountIn });
-        await tx.wait();
+        const iface = new E.Interface(V3_ROUTER_ABI);
+        if (FEE_WALLET) {
+          const swapData = iface.encodeFunctionData("exactInputSingle", [
+            { tokenIn: WETH_ADDR, tokenOut: xTok.token, fee: xV3Fee, recipient: ADDR_THIS, amountIn, amountOutMinimum: minOut, sqrtPriceLimitX96: 0 }]);
+          const sweepData = iface.encodeFunctionData("sweepTokenWithFee", [xTok.token, minOut, to, 100, FEE_WALLET]); // 1% terminal fee
+          const tx = await r3.multicall([swapData, sweepData], { value: amountIn });
+          await tx.wait();
+        } else {
+          const tx = await r3.exactInputSingle(
+            { tokenIn: WETH_ADDR, tokenOut: xTok.token, fee: xV3Fee, recipient: to, amountIn, amountOutMinimum: minOut, sqrtPriceLimitX96: 0 },
+            { value: amountIn });
+          await tx.wait();
+        }
       } else {
         const tok = new E.Contract(xTok.token, TOK_ABI, s);
         const allow = await tok.allowance(to, V3_ROUTER);
@@ -909,7 +953,9 @@ async function doSwapX() {
         const iface = new E.Interface(V3_ROUTER_ABI);
         const swapData = iface.encodeFunctionData("exactInputSingle", [
           { tokenIn: xTok.token, tokenOut: WETH_ADDR, fee: xV3Fee, recipient: ADDR_THIS, amountIn, amountOutMinimum: minOut, sqrtPriceLimitX96: 0 }]);
-        const unwrapData = iface.encodeFunctionData("unwrapWETH9", [minOut, to]);
+        const unwrapData = FEE_WALLET
+          ? iface.encodeFunctionData("unwrapWETH9WithFee", [minOut, to, 100, FEE_WALLET])
+          : iface.encodeFunctionData("unwrapWETH9", [minOut, to]);
         const tx = await r3.multicall([swapData, unwrapData]);
         await tx.wait();
       }
@@ -925,6 +971,29 @@ async function doSwapX() {
     st.className = "status ok"; st.textContent = (useTurbo ? "⚡" : "✅") + (buying ? " bought" : " sold");
     fillXPanel();
   } catch (e) { st.className = "status err"; st.textContent = e.shortMessage || e.message; }
+}
+
+async function renderCreators() {
+  document.getElementById("homeView").style.display = "none";
+  document.querySelector(".feed").style.display = "none";
+  $("statsView").style.display = "block";
+  let d = { creators: [] };
+  try { d = await (await fetch("/api/creators")).json(); } catch (e) {}
+  $("statsView").innerHTML = `<div style="max-width:1000px;margin:0 auto">
+    <a class="back" href="/">← all tokens</a>
+    <div class="tpName" style="margin-bottom:4px">👑 Top Creators</div>
+    <div style="color:var(--faint);font-size:13px;margin-bottom:16px">launch on robn.fun → earn 50% of every trade fee, instantly, forever. this is what creators are making:</div>
+    <div class="panel" style="padding:8px 16px">
+      ${d.creators.length ? d.creators.map((c, i) => `
+        <div class="trade" style="display:grid;grid-template-columns:44px 1fr 1fr 1fr;gap:10px;align-items:center">
+          <span style="font-weight:700">#${i + 1}${i === 0 ? " 👑" : ""}</span>
+          <a href="${EXPLORER}/address/${c.addr}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">${short(c.addr)}</a>
+          <span style="text-align:right;color:var(--dim)">${c.launches} launch${c.launches === 1 ? "" : "es"}${c.top ? " · top: $" + c.top : ""}</span>
+          <span style="text-align:right;font-family:'JetBrains Mono';font-weight:700;color:var(--green)">${Number(E.formatEther(BigInt(c.fees))).toFixed(4)} ETH earned</span>
+        </div>`).join("") : `<div style="color:var(--faint);padding:16px 0;font-size:13px">no creator earnings yet — first launch takes the crown</div>`}
+    </div>
+    <div style="margin-top:14px"><button class="btn" onclick="openLaunch()">+ launch a token & start earning</button></div>
+  </div>`;
 }
 
 async function renderStats() {
@@ -992,12 +1061,15 @@ async function init() {
   startPulse();
   try { $("feeShow").textContent = E.formatEther(await pad.creationFee()); } catch (e) {}
   try { MIGRATION_ETH = Number(E.formatEther(await pad.migrationEth())); } catch (e) {}
+  try { FEE_WALLET = await pad.feeWallet(); } catch (e) {}
   await loadTokens();
   if (pageToken) {
     document.getElementById("homeView").style.display = "none";
     document.querySelector(".feed").style.display = "none";
     renderTokenPage();
     setInterval(async () => { await loadTokens(); renderTokenPage(true); }, 20000);
+  } else if (creatorsPage) {
+    renderCreators();
   } else if (trenchPage) {
     renderTrenches();
   } else if (xPair) {
@@ -1013,6 +1085,7 @@ async function init() {
     watchNewTokens();
   }
   loadFeed(); // trending ticker on every page
+  try { const r = new URLSearchParams(location.search).get("ref"); if (r && /^0x[0-9a-fA-F]{40}$/.test(r)) localStorage.setItem("robn-ref", r); } catch (e) {}
   setInterval(ethPrice, 60000);
 }
 
@@ -1605,7 +1678,17 @@ async function reconnectSilently() {
     signer = await bp.getSigner();
     wallet = await signer.getAddress();
     $("connectBtn").textContent = short(wallet);
+    submitRef();
     if (pageToken && currentToken) fillTradePanel(currentToken);
+  } catch (e) {}
+}
+
+function submitRef() {
+  try {
+    const r = localStorage.getItem("robn-ref");
+    if (!r || !wallet || r.toLowerCase() === wallet.toLowerCase()) return;
+    fetch("/ref", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ user: wallet, ref: r }) }).catch(() => {});
+    localStorage.removeItem("robn-ref");
   } catch (e) {}
 }
 if (window.ethereum) {
@@ -1627,7 +1710,11 @@ async function connect() {
   $("connectBtn").textContent = short(wallet);
   if (pageToken && currentToken) fillTradePanel(currentToken);
 }
-async function needWallet() { if (!signer) await connect(); return !!signer; }
+async function needWallet() {
+  if (!signer) await connect();
+  if (signer && !(await ensureChain())) return false;
+  return !!signer;
+}
 
 // ---- launch ----
 function openBridge() { $("bridgeModal").classList.add("open"); }

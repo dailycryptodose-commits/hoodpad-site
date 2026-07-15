@@ -258,7 +258,56 @@ app.get("/prices/:token", (req, res) => {
 });
 
 // token pages — same app, client-side routing
-app.get("/t/:token", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+app.get("/api/creators", (req, res) => {
+  const agg = {};
+  for (const t of tokenCache.tokens || []) {
+    if (!t.creator) continue;
+    const c = t.creator.toLowerCase();
+    if (!agg[c]) agg[c] = { fees: 0n, launches: 0, top: null };
+    agg[c].fees += BigInt(t.creatorFees || "0");
+    agg[c].launches++;
+    if (!agg[c].top || Number(t.mcapUsd || 0) > agg[c].topM) { agg[c].top = t.symbol; agg[c].topM = Number(t.mcapUsd || 0); }
+  }
+  const rows = Object.entries(agg).map(([a, v]) => ({ addr: a, fees: v.fees.toString(), launches: v.launches, top: v.top }))
+    .sort((x, y) => (BigInt(y.fees) > BigInt(x.fees) ? 1 : -1)).slice(0, 50);
+  res.json({ creators: rows });
+});
+
+// 2) referral attribution (light v1)
+const REFS_FILE = path.join(DATA_DIR, "refs.json");
+let refs = {};
+try { refs = JSON.parse(fs.readFileSync(REFS_FILE, "utf8")); } catch (e) {}
+app.post("/ref", (req, res) => {
+  try {
+    const { user, ref } = req.body || {};
+    if (!/^0x[0-9a-fA-F]{40}$/.test(user || "") || !/^0x[0-9a-fA-F]{40}$/.test(ref || "")) return res.json({ ok: false });
+    const u = user.toLowerCase(), r = ref.toLowerCase();
+    if (u === r || refs[u]) return res.json({ ok: false }); // first ref sticks, no self-refs
+    refs[u] = r;
+    fs.writeFileSync(REFS_FILE, JSON.stringify(refs));
+    res.json({ ok: true });
+  } catch (e) { res.json({ ok: false }); }
+});
+
+// 3) link-preview meta injection for token pages
+let indexHtml = "";
+try { indexHtml = fs.readFileSync(path.join(__dirname, "index.html"), "utf8"); } catch (e) {}
+app.get("/t/:token", (req, res) => {
+  try {
+    const a = (req.params.token || "").toLowerCase();
+    const t = (tokenCache.tokens || []).find((x) => x.addr.toLowerCase() === a);
+    if (t && indexHtml) {
+      const title = `${t.name} ($${t.symbol}) — robn.fun`;
+      const desc = `trade $${t.symbol} on robn.fun · the launchpad + terminal of robinhood chain · creators earn 50% of every trade fee`;
+      const img = t.meta && t.meta.image && t.meta.image.startsWith("/img/") ? "https://robn.fun" + t.meta.image : "https://robn.fun/logo.png";
+      let html = indexHtml.replace(/<title>[^<]*<\/title>/, `<title>${title}</title>`);
+      html = html.replace("</head>", `<meta property="og:title" content="${title}"><meta property="og:description" content="${desc}"><meta property="og:image" content="${img}"><meta name="twitter:card" content="summary"><meta name="twitter:title" content="${title}"><meta name="twitter:description" content="${desc}"><meta name="twitter:image" content="${img}"></head>`);
+      return res.send(html);
+    }
+  } catch (e) {}
+  res.sendFile(path.join(__dirname, "index.html"));
+});
+app.get("/creators", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
 
 // ---- analytics indexer ----
 const STATS_FILE = path.join(DATA_DIR, "stats.json");
@@ -425,6 +474,7 @@ app.get("/api/trenches", (req, res) => {
 
 // season 1 points: 1000 pts per ETH traded + 500 per token launched
 app.get("/points", (req, res) => {
+  // base points computed below; referral bonus applied after
   const pts = {};
   for (const [a, wei] of Object.entries(stats.traderVol || {})) {
     pts[a] = (pts[a] || 0) + Number(BigInt(wei) / 1000000000000000n) / 1000; // eth with 3dp
@@ -432,6 +482,10 @@ app.get("/points", (req, res) => {
   for (const a of Object.keys(pts)) pts[a] = Math.floor(pts[a] * 1000);
   for (const [a, n] of Object.entries(stats.creatorLaunches || {})) {
     pts[a] = (pts[a] || 0) + n * 500;
+  }
+  // referral bonus: referrer earns +10% of each referee's points
+  for (const [user, referrer] of Object.entries(refs)) {
+    if (pts[user]) pts[referrer] = (pts[referrer] || 0) + Math.floor(pts[user] * 0.1);
   }
   const board = Object.entries(pts).map(([a, p]) => ({ a, p })).sort((x, y) => y.p - x.p).slice(0, 100);
   res.json({ board, season: 1 });
