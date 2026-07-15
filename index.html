@@ -1039,7 +1039,8 @@ async function ensurePermit2(s, owner, amt, st, useTurbo) {
   }
 }
 
-async function doSwapX() {
+async function doSwapX() { return oneAtATime(_doSwapX); }
+async function _doSwapX() {
   const useTurbo = turbo.on && turbo.wallet;
   if (!useTurbo && !(await needWallet())) return;
   const v = parseFloat($("xAmt").value); if (!v) return;
@@ -1049,6 +1050,7 @@ async function doSwapX() {
   const deadline = Math.floor(Date.now() / 1000) + 600;
   const buying = xTradeTab === "buy";
   try {
+    st.textContent = "preparing…";
     if (useTurbo) {
       const tb = await turboBal();
       if (tb < E.parseEther("0.002")) { st.className = "status err"; st.textContent = "⚡ trading wallet is empty — tap the ⚡ strip to deposit"; return; }
@@ -1846,8 +1848,44 @@ async function loadFeed() {
 setInterval(loadFeed, 60000);
 
 // ---- wallet ----
+// wallet extensions inject window.ethereum asynchronously — and some (okx, opera's,
+// brave with several wallets installed) are late. checking once on load is a race we lose,
+// which is why a refresh could ask you to reconnect. wait for it instead.
+function waitForWalletProvider(ms = 5000) {
+  if (window.ethereum) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    const iv = setInterval(() => {
+      if (window.ethereum) { clearInterval(iv); resolve(true); }
+      else if (Date.now() - t0 > ms) { clearInterval(iv); resolve(false); }
+    }, 120);
+    // modern wallets also announce themselves — take the shortcut when offered
+    window.addEventListener("eip6963:announceProvider", () => { if (window.ethereum) { clearInterval(iv); resolve(true); } }, { once: true });
+    try { window.dispatchEvent(new Event("eip6963:requestProvider")); } catch (e) {}
+  });
+}
+
+// react to the wallet changing account/chain instead of making the user refresh
+function hookWalletEvents() {
+  if (!window.ethereum || window._walletHooked || !window.ethereum.on) return;
+  window._walletHooked = true;
+  try {
+    window.ethereum.on("accountsChanged", async (accs) => {
+      if (!accs || !accs.length) { wallet = null; signer = null; $("connectBtn").textContent = "Connect wallet"; }
+      else { await reconnectSilently(); }
+      if (pageToken && currentToken) fillTradePanel(currentToken);
+      if (xTok) fillXPanel();
+    });
+    window.ethereum.on("chainChanged", () => {
+      if (pageToken && currentToken) fillTradePanel(currentToken);
+      if (xTok) fillXPanel();
+    });
+  } catch (e) {}
+}
+
 async function reconnectSilently() {
-  if (!window.ethereum) return;
+  if (!(await waitForWalletProvider())) return;
+  hookWalletEvents();
   try {
     const accounts = await window.ethereum.request({ method: "eth_accounts" }); // no popup
     if (!accounts || !accounts.length) return;
@@ -1857,6 +1895,7 @@ async function reconnectSilently() {
     $("connectBtn").textContent = short(wallet);
     submitRef();
     if (pageToken && currentToken) fillTradePanel(currentToken);
+    if (xTok) fillXPanel(); // trenches panel depends on which wallet is connected
   } catch (e) {}
 }
 
@@ -1929,7 +1968,8 @@ function doBridge() {
 function openLaunch() { $("launchModal").classList.add("open"); }
 function closeModals() { document.querySelectorAll(".modalBg").forEach((m) => m.classList.remove("open")); }
 
-async function doLaunch() {
+async function doLaunch() { return oneAtATime(_doLaunch); }
+async function _doLaunch() {
   if (!(await needWallet())) return;
   const name = $("lName").value.trim(), tick = $("lTick").value.trim().toUpperCase();
   if (!name || !tick) { toast("name and ticker required"); return; }
@@ -2018,6 +2058,23 @@ async function quoteS() {
   } catch (e) {}
 }
 
+// ONE wallet action at a time. without this, a slow rpc makes the page look frozen,
+// the user clicks again, and every click queues another wallet popup (the "okx opened
+// 12 times" bug). the lock also disables the button so it's visibly working.
+let txBusy = false;
+async function oneAtATime(fn) {
+  if (txBusy) return;
+  txBusy = true;
+  const btns = document.querySelectorAll("#xGoBtn, .btn[onclick^='doBuy'], .btn[onclick^='doSell'], #launchGo");
+  const prev = [];
+  btns.forEach((b) => { prev.push([b, b.disabled, b.textContent]); b.disabled = true; b.style.opacity = ".55"; });
+  try { await fn(); }
+  finally {
+    txBusy = false;
+    prev.forEach(([b, d, t]) => { b.disabled = d; b.style.opacity = ""; if (b.textContent !== t) b.textContent = t; });
+  }
+}
+
 // after a trade the read node is often a block behind — poll briefly so the panel
 // never repaints with the pre-trade balance (that's the stale-slider bug).
 async function settleBalance(who, before) {
@@ -2029,7 +2086,8 @@ async function settleBalance(who, before) {
 }
 function tradeWho() { return (turbo.on && turbo.wallet) ? turbo.wallet.address : wallet; }
 
-async function doBuy() {
+async function doBuy() { return oneAtATime(_doBuy); }
+async function _doBuy() {
   const useTurbo = turbo.on && turbo.wallet;
   if (!useTurbo && !(await needWallet())) return;
   const v = parseFloat($("buyAmt").value); if (!v) return;
@@ -2045,11 +2103,13 @@ async function doBuy() {
   } catch (e) { st.className = "status err"; st.textContent = e.shortMessage || e.message; }
 }
 
-async function doSell() {
+async function doSell() { return oneAtATime(_doSell); }
+async function _doSell() {
   const useTurbo = turbo.on && turbo.wallet;
   if (!useTurbo && !(await needWallet())) return;
   const v = parseFloat($("sellAmt").value); if (!v) return;
   const st = $("tStatus"); st.className = "status";
+  st.textContent = "checking approval…"; // never leave the status blank — silence reads as frozen
   try {
     const amt = sellAmtWei();
     const s = tradeSigner();
