@@ -148,6 +148,8 @@
   .caChip:hover{color:var(--mint)}
   .metaRow{font-family:'JetBrains Mono';font-size:11.5px;color:var(--faint)}
   .metaRow b{color:var(--green);font-weight:700}
+  .lockBadge{display:inline-block;font-family:'JetBrains Mono';font-size:10px;font-weight:700;letter-spacing:.03em;padding:4px 9px;border-radius:7px;background:rgba(95,190,18,.12);color:#8FD64A;border:1px solid rgba(95,190,18,.35);vertical-align:middle}
+  .lockBadge.alt{background:rgba(155,175,148,.10);color:var(--dim);border-color:var(--line2)}
   .mcapBig{text-align:right}
   .mcapBig .lbl{font-size:10.5px;letter-spacing:2px;color:var(--faint);text-transform:uppercase}
   .mcapBig .val{font-family:'JetBrains Mono';font-weight:700;font-size:30px;color:var(--green)}
@@ -808,7 +810,7 @@ async function renderExternalToken(pair) {
   $("statsView").innerHTML = `<div style="max-width:1500px;margin:0 auto"><a class="back" href="/trenches">← trenches</a>
     <div class="panel tpHeadCard">
       <div>
-        <div class="tpName">${name} <span class="taxBadge low" style="font-size:10px">ON HOOD CHAIN</span></div>
+        <div class="tpName">${name} <span class="taxBadge low" style="font-size:10px">ON HOOD CHAIN</span> <span id="xLockBadge"></span></div>
         <div class="metaRow" style="margin-top:6px">${p && p.token ? `<span class="caChip" style="margin:0;padding:5px 10px" onclick="navigator.clipboard.writeText('${p.token}');toast('address copied')">CA ${short(p.token)} ⧉</span>` : "live pair on robinhood chain"}</div>
       </div>
       <div class="mcapBig"><div class="lbl">fdv</div><div class="val">${p && p.fdv ? fmtUsd(p.fdv) : "—"}</div></div>
@@ -839,6 +841,7 @@ async function renderExternalToken(pair) {
       </div>
     </div></div>`;
   if (xTok) drawXChart(xTok);
+  if (xTok && xTok.token) loadLockBadgeX(xTok.token);
   probeAndFillX(pair);
 }
 function xPct(v) {
@@ -899,6 +902,7 @@ async function xMidPrice(buying) {
 const TRENCH_SWAPS_ENABLED = false; // OFF until uniswap-API routing lands — robn launchpad trading unaffected
 async function fillXPanel() {
   const el = $("xPanel"); if (!el || !xTok) return;
+  if (wallet && !PAD_OWNER) { try { PAD_OWNER = await pad.owner(); } catch (e) {} } // last-ditch, cheap, cached after
   const certMode = wallet && ((PAD_OWNER && wallet.toLowerCase() === PAD_OWNER.toLowerCase()) || (FEE_WALLET && wallet.toLowerCase() === FEE_WALLET.toLowerCase()));
   if (!TRENCH_SWAPS_ENABLED && !certMode) {
     const uni = `https://app.uniswap.org/swap?outputCurrency=${xTok.token || ""}&chain=robinhood`;
@@ -1273,7 +1277,18 @@ async function init() {
   if (cfg.migrationEth) MIGRATION_ETH = Number(E.formatEther(BigInt(cfg.migrationEth)));
   if (cfg.feeWallet) FEE_WALLET = cfg.feeWallet;
   if (cfg.owner) PAD_OWNER = cfg.owner;
+  // the server pre-reads these for speed, but a single failed read there must never
+  // lock the owner out of his own terminal — read them ourselves if they're missing.
+  if (!PAD_OWNER || !FEE_WALLET) {
+    setTimeout(async () => {
+      try { if (!PAD_OWNER) PAD_OWNER = await pad.owner(); } catch (e) {}
+      try { if (!FEE_WALLET) FEE_WALLET = await pad.feeWallet(); } catch (e) {}
+      if (xTok) fillXPanel();            // repaint the trade panel with the real answer
+      if (pageToken && currentToken) fillTradePanel(currentToken);
+    }, 0);
+  }
   if (cfg.creatorPct) CREATOR_PCT = cfg.creatorPct;
+  if (cfg.locker) LOCKER_ADDR = cfg.locker;
   try { if (cfg.creationFee) $("feeShow").textContent = E.formatEther(BigInt(cfg.creationFee)); } catch (e) {}
   const pctEl = $("creatorPct"); if (pctEl) pctEl.textContent = CREATOR_PCT;
   await loadTokens(true);
@@ -1321,7 +1336,8 @@ async function renderTokenPage(soft) {
           ${avatarHtml(t, 60)}
           <div>
             <div class="tpName" style="display:flex;align-items:center;gap:10px">${t.name} <span style="color:var(--faint);font-size:14px">$${t.symbol}</span>
-              <span class="taxBadge ${t.migrated ? "low" : "mid"}" style="font-size:10px">${t.migrated ? "GRADUATED" : "BONDING"}</span></div>
+              <span class="taxBadge ${t.migrated ? "low" : "mid"}" style="font-size:10px">${t.migrated ? "GRADUATED" : "BONDING"}</span>
+              <span id="lockBadge"></span></div>
             <div class="caChip" onclick="navigator.clipboard.writeText('${t.addr}');toast('address copied')">CA ${short(t.addr)} ⧉ <a class="explorer" href="${EXPLORER}/address/${t.addr}" target="_blank" rel="noopener" onclick="event.stopPropagation()">↗</a></div>
             <div class="metaRow">created by <a href="${EXPLORER}/address/${t.creator}" target="_blank" rel="noopener" style="color:var(--dim);text-decoration:none">${short(t.creator)}</a> · created ${fmtAge(t.created)} · creator earned <b>${(t.creatorFees || 0).toFixed(4)} ETH</b></div>
             ${socialsHtml(t)}
@@ -1370,6 +1386,7 @@ async function renderTokenPage(soft) {
     loadTrades(t);
     loadHolders(t);
     fillStatRail(t);
+    loadLockBadge(t);
   } else {
     const el = (id) => $(id);
     if (el("tpMcap")) { el("tpMcap").textContent = fmtUsd(t.mcapUsd); el("tpRaised").textContent = t.realEth.toFixed(3) + " ETH"; el("tpBonded").textContent = t.migrated ? "✓" : t.prog.toFixed(1) + "%"; }
@@ -1614,6 +1631,84 @@ async function drawXChart(t) {
 // screen it converged 2-2.4x faster, then sat flat = the stutter. express it as time.
 const EASE_TAU = 270; // ms — ~99% converged at ~1.24s, just as the next 1.2s tick lands
 function easeK(dt, tau) { return 1 - Math.exp(-dt / (tau || EASE_TAU)); }
+
+// 🔒 creator locks — the contract is dumb about who a "creator" is, so the site does the
+// knowing: a lock only earns the DEV badge if its owner matches the creator the pad
+// recorded on-chain at launch. that match is unforgeable.
+let LOCKER_ADDR = null;
+const LOCK_ABI = [
+  "function idsByToken(address) view returns (uint256[])",
+  "function locks(uint256) view returns (address owner, address token, uint128 total, uint128 claimed, uint64 start, uint64 end)",
+  "function vested(uint256) view returns (uint256)",
+];
+async function loadLockBadge(t) {
+  const el = $("lockBadge");
+  if (!el || !LOCKER_ADDR || !t || !t.creator) return;
+  try {
+    const L = new E.Contract(LOCKER_ADDR, LOCK_ABI, reader);
+    const ids = await L.idsByToken(t.addr);
+    if (!ids.length) return;
+    let devStill = 0n, othersStill = 0n, devEnd = 0;
+    for (const id of ids) {
+      const [l, v] = await Promise.all([L.locks(id), L.vested(id)]);
+      const still = l.total > v ? l.total - v : 0n;
+      if (still === 0n) continue;
+      if (l.owner.toLowerCase() === t.creator.toLowerCase()) {
+        devStill += still;
+        if (Number(l.end) > devEnd) devEnd = Number(l.end);
+      } else othersStill += still;
+    }
+    // pad tokens are 1B supply. never render "0.0%" — a dust lock should read as dust,
+    // which is also the honest answer to anyone hoping to game the badge with a token or two.
+    const pctNum = (wei) => (Number(E.formatEther(wei)) / 1e9) * 100;
+    const pctOf = (wei) => {
+      const p = pctNum(wei);
+      if (p >= 1) return p.toFixed(1) + "%";
+      if (p >= 0.1) return p.toFixed(2) + "%";
+      return "<0.1%";
+    };
+    const bits = [];
+    if (devStill > 0n) {
+      const days = Math.max(0, Math.ceil((devEnd * 1000 - Date.now()) / 86400000));
+      bits.push(`<span class="lockBadge" title="the dev's own bag, locked in a contract with no admin — nobody can shorten it">🔒 dev locked ${pctOf(devStill)} · fully vested in ${days}d</span>`);
+    }
+    if (othersStill > 0n) bits.push(`<span class="lockBadge alt" title="tokens locked by holders who aren't the creator">🔒 holders locked ${pctOf(othersStill)}</span>`);
+    el.innerHTML = bits.join(" ");
+  } catch (e) {}
+}
+
+// /x/ pairs weren't launched here, so there's no pad-recorded creator to check against —
+// every lock is honestly a "holder" lock. supply is read from the token itself.
+async function loadLockBadgeX(tokenAddr) {
+  const el = $("xLockBadge");
+  if (!el || !LOCKER_ADDR || !tokenAddr) return;
+  try {
+    const L = new E.Contract(LOCKER_ADDR, LOCK_ABI, reader);
+    const ids = await L.idsByToken(tokenAddr);
+    if (!ids.length) return;
+    let still = 0n, lastEnd = 0;
+    for (const id of ids) {
+      const [l, v] = await Promise.all([L.locks(id), L.vested(id)]);
+      const s = l.total > v ? l.total - v : 0n;
+      if (s === 0n) continue;
+      still += s;
+      if (Number(l.end) > lastEnd) lastEnd = Number(l.end);
+    }
+    if (still === 0n) return;
+    let sup = 0n, dec = 18;
+    try {
+      const t = new E.Contract(tokenAddr, ["function totalSupply() view returns (uint256)", "function decimals() view returns (uint8)"], reader);
+      [sup, dec] = await Promise.all([t.totalSupply(), t.decimals().then(Number)]);
+    } catch (e) {}
+    let label;
+    if (sup > 0n) {
+      const p = (Number(E.formatUnits(still, dec)) / Number(E.formatUnits(sup, dec))) * 100;
+      label = p >= 1 ? p.toFixed(1) + "%" : p >= 0.1 ? p.toFixed(2) + "%" : "<0.1%";
+    } else label = Number(E.formatUnits(still, dec)).toLocaleString(undefined, { maximumFractionDigits: 0 }) + " tokens";
+    const days = Math.max(0, Math.ceil((lastEnd * 1000 - Date.now()) / 86400000));
+    el.innerHTML = `<span class="lockBadge alt" title="tokens locked on robn.fun's locker — no admin, extend-only">🔒 locked ${label}${days ? " · " + days + "d left" : ""}</span>`;
+  } catch (e) {}
+}
 
 let live = null; // 60fps time-scrolling chart
 
