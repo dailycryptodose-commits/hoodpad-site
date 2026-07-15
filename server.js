@@ -157,6 +157,20 @@ async function watchChainTrades() {
 }
 setInterval(watchChainTrades, 30000);
 
+// keep the pool list warm server-side so the trade watcher always has targets
+async function warmTrenches() {
+  try {
+    if (trenchCache.data && Date.now() - trenchCache.ts < 25_000) return;
+    const get = (u) => fetch(u, { headers: { accept: "application/json" } }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    const [tr, top, nw] = await Promise.all([get(GT + "/trending_pools"), get(GT + "/pools?sort=h24_volume_usd_desc&page=1"), get(GT + "/new_pools?page=1")]);
+    const clean = (j) => (j && j.data ? j.data.map(mapPool).filter(Boolean) : []);
+    const data = { ts: Date.now(), trending: clean(tr), top: clean(top), fresh: clean(nw) };
+    if (data.trending.length || data.top.length || data.fresh.length) trenchCache = { ts: Date.now(), data };
+  } catch (e) {}
+}
+warmTrenches();
+setInterval(warmTrenches, 30000);
+
 const port = process.env.PORT || 3000;
 server.listen(port, () => console.log("hoodpad site running on " + port));
 

@@ -436,10 +436,10 @@ function queueXToast(msg) {
 
 function handleLive(m) {
   if (m.t === "xtrade") {
-    if (m.usd >= 100) { // skip dust so it stays classy
-      const amt = m.usd >= 1000 ? "$" + (m.usd / 1000).toFixed(1) + "K" : "$" + m.usd.toFixed(0);
-      queueXToast(`${m.side === "buy" ? "🟢" : "🔴"} ${m.side} ${amt} · ${m.name}`);
-    }
+    const amt = m.usd >= 1000 ? "$" + (m.usd / 1000).toFixed(1) + "K" : "$" + m.usd.toFixed(0);
+    const line = `${m.side === "buy" ? "🟢" : "🔴"} ${m.side} ${amt} · ${m.name}`;
+    if (m.usd >= 250) queueXToast(line); // toasts for the bigger ones
+    addFeedItem(`<span class="${m.side === "buy" ? "buyC" : "sellC"}">${m.side === "buy" ? "▲" : "▼"} ${m.name}</span> ${amt}`);
     return;
   }
   if (m.t === "created") {
@@ -1424,6 +1424,16 @@ async function watchNewTokens() {
       if (first) { first.style.animation = "popIn .5s cubic-bezier(.2,.9,.3,1.4)"; }
     } catch (e) {}
   }, 4000);
+}
+
+function addFeedItem(html) {
+  const f = $("feed"), inner = $("feedInner");
+  if (!f || !inner) return;
+  f.style.display = "flex";
+  const s = document.createElement("span");
+  s.innerHTML = html;
+  inner.insertBefore(s, inner.firstChild);
+  while (inner.children.length > 18) inner.removeChild(inner.lastChild);
 }
 
 async function loadFeed() {
