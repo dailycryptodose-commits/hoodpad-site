@@ -361,6 +361,43 @@ app.get("/stats", (req, res) => {
 });
 
 app.get("/analytics", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+app.get("/trenches", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+app.get("/x/:pair", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+
+// hood-chain-wide token data via geckoterminal (free api, cached 30s)
+let trenchCache = { ts: 0, data: null };
+const GT = "https://api.geckoterminal.com/api/v2/networks/robinhood";
+function mapPool(d) {
+  try {
+    const a = d.attributes;
+    return {
+      pair: a.address,
+      name: a.name,
+      priceUsd: Number(a.base_token_price_usd),
+      ch: { m5: Number(a.price_change_percentage?.m5), h1: Number(a.price_change_percentage?.h1), h6: Number(a.price_change_percentage?.h6), h24: Number(a.price_change_percentage?.h24) },
+      vol24: Number(a.volume_usd?.h24),
+      liq: Number(a.reserve_in_usd),
+      fdv: Number(a.fdv_usd),
+      created: a.pool_created_at,
+      dex: d.relationships?.dex?.data?.id || "",
+    };
+  } catch (e) { return null; }
+}
+app.get("/api/trenches", async (req, res) => {
+  try {
+    if (trenchCache.data && Date.now() - trenchCache.ts < 30_000) return res.json(trenchCache.data);
+    const get = (u) => fetch(u, { headers: { accept: "application/json" } }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    const [tr, top, nw] = await Promise.all([
+      get(GT + "/trending_pools"),
+      get(GT + "/pools?sort=h24_volume_usd_desc&page=1"),
+      get(GT + "/new_pools?page=1"),
+    ]);
+    const clean = (j) => (j && j.data ? j.data.map(mapPool).filter(Boolean) : []);
+    const data = { ts: Date.now(), trending: clean(tr), top: clean(top), fresh: clean(nw) };
+    if (data.trending.length || data.top.length || data.fresh.length) trenchCache = { ts: Date.now(), data };
+    res.json(data);
+  } catch (e) { res.json({ ts: Date.now(), trending: [], top: [], fresh: [], err: true }); }
+});
 
 // season 1 points: 1000 pts per ETH traded + 500 per token launched
 app.get("/points", (req, res) => {

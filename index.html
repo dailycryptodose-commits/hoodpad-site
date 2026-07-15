@@ -203,6 +203,7 @@
   </a>
   <input id="searchBar" class="search" placeholder="search name, ticker, or paste CA…" oninput="doSearch(this.value)" onkeydown="if(event.key==='Enter')searchGo(this.value)">
   <div class="navBtns">
+    <a href="/trenches" class="btn ghost" style="text-decoration:none">Trenches</a>
     <a href="https://relay.link/bridge/robinhood" target="_blank" rel="noopener" class="btn ghost" style="text-decoration:none">Bridge</a>
     <a href="/analytics" class="btn ghost" style="text-decoration:none">Analytics</a>
     <button class="btn ghost" id="themeBtn" onclick="toggleTheme()" title="theme">☀</button>
@@ -419,6 +420,9 @@ const pagePath = location.pathname.match(/^\/t\/(0x[0-9a-fA-F]{40})$/);
 const pageToken = pagePath ? pagePath[1] : null;
 const statsPage = location.pathname === "/analytics";
 const seasonPage = location.pathname === "/season";
+const trenchPage = location.pathname === "/trenches";
+const xMatch = location.pathname.match(/^\/x\/(0x[a-fA-F0-9]{40})/);
+const xPair = xMatch ? xMatch[1] : null;
 
 async function renderSeason() {
   document.getElementById("homeView").style.display = "none";
@@ -451,6 +455,79 @@ async function renderSeason() {
         : `<div style="color:var(--faint);font-size:13px;padding:12px 0">nobody yet — first trade takes #1</div>`}
     </div>
     </div>`;
+}
+
+let trenchData = null, trenchTab = "trending";
+async function renderTrenches() {
+  document.getElementById("homeView").style.display = "none";
+  document.querySelector(".feed").style.display = "none";
+  $("statsView").style.display = "block";
+  $("statsView").innerHTML = `<div style="max-width:1200px;margin:0 auto"><a class="back" href="/">← launchpad</a>
+    <div class="tpName" style="margin-bottom:4px">⚔️ Trenches</div>
+    <div style="color:var(--faint);font-size:13px;margin-bottom:14px">every token on robinhood chain · live via dexscreener/geckoterminal</div>
+    <div class="tabs" style="margin-bottom:12px">
+      <button class="tabBtn" data-tab="trending" onclick="setTrenchTab('trending')">🔥 Trending</button>
+      <button class="tabBtn" data-tab="top" onclick="setTrenchTab('top')">📊 Top volume</button>
+      <button class="tabBtn" data-tab="fresh" onclick="setTrenchTab('fresh')">✨ New</button>
+    </div>
+    <div class="panel" style="padding:8px 14px"><div id="trenchList"><div style="color:var(--faint);padding:20px 0;font-size:13px">loading the trenches…</div></div></div></div>`;
+  await loadTrenches();
+  setInterval(loadTrenches, 30000);
+}
+async function loadTrenches() {
+  try { trenchData = await (await fetch("/api/trenches")).json(); } catch (e) {}
+  paintTrenches();
+}
+function setTrenchTab(t) {
+  trenchTab = t;
+  document.querySelectorAll(".tabBtn").forEach((b) => b.classList.toggle("on", b.dataset.tab === t));
+  paintTrenches();
+}
+function pctCell(v) {
+  if (v === null || v === undefined || isNaN(v)) return `<span style="color:var(--faint)">—</span>`;
+  const c = v >= 0 ? "var(--green)" : "var(--red)";
+  return `<span style="color:${c}">${v >= 0 ? "+" : ""}${v.toFixed(1)}%</span>`;
+}
+function paintTrenches() {
+  const el = $("trenchList"); if (!el || !trenchData) return;
+  const list = trenchData[trenchTab] || [];
+  if (!list.length) { el.innerHTML = `<div style="color:var(--faint);padding:20px 0;font-size:13px">nothing here yet — the trenches are quiet</div>`; return; }
+  el.innerHTML = `
+    <div class="trade" style="color:var(--faint);font-size:10.5px;text-transform:uppercase;letter-spacing:1px"><span>token</span><span>price</span><span>5m</span><span>1h</span><span>24h</span><span>24h vol</span><span>liquidity</span></div>
+    ${list.slice(0, 30).map((p) => `
+      <a class="trade" href="/x/${p.pair}" style="text-decoration:none;color:inherit;display:grid;grid-template-columns:2fr 1fr .7fr .7fr .7fr 1fr 1fr;gap:8px;align-items:center">
+        <span style="font-weight:600">${(p.name || "?").split("/")[0].trim()}</span>
+        <span style="font-family:'JetBrains Mono';font-size:12px">$${p.priceUsd < 0.001 ? p.priceUsd.toExponential(2) : p.priceUsd.toFixed(5)}</span>
+        ${pctCell(p.ch.m5)}${pctCell(p.ch.h1)}${pctCell(p.ch.h24)}
+        <span style="font-family:'JetBrains Mono';font-size:12px">${fmtUsd(p.vol24 || 0)}</span>
+        <span style="font-family:'JetBrains Mono';font-size:12px">${fmtUsd(p.liq || 0)}</span>
+      </a>`).join("")}`;
+  document.querySelectorAll(".tabBtn").forEach((b) => b.classList.toggle("on", b.dataset.tab === trenchTab));
+}
+
+async function renderExternalToken(pair) {
+  document.getElementById("homeView").style.display = "none";
+  document.querySelector(".feed").style.display = "none";
+  $("statsView").style.display = "block";
+  if (!trenchData) { try { trenchData = await (await fetch("/api/trenches")).json(); } catch (e) {} }
+  const all = trenchData ? [...(trenchData.trending || []), ...(trenchData.top || []), ...(trenchData.fresh || [])] : [];
+  const p = all.find((x) => x.pair.toLowerCase() === pair.toLowerCase());
+  const name = p ? p.name.split("/")[0].trim() : short(pair);
+  $("statsView").innerHTML = `<div style="max-width:1200px;margin:0 auto"><a class="back" href="/trenches">← trenches</a>
+    <div class="panel tpHeadCard">
+      <div>
+        <div class="tpName">${name} <span class="taxBadge low" style="font-size:10px">ON HOOD CHAIN</span></div>
+        <div class="metaRow" style="margin-top:6px">${p ? `24h vol <b>${fmtUsd(p.vol24 || 0)}</b> · liquidity <b>${fmtUsd(p.liq || 0)}</b> · 24h ${p.ch.h24 >= 0 ? "+" : ""}${(p.ch.h24 || 0).toFixed(1)}%` : "live pair on robinhood chain"}</div>
+      </div>
+      <div class="mcapBig"><div class="lbl">fdv</div><div class="val">${p && p.fdv ? fmtUsd(p.fdv) : "—"}</div></div>
+    </div>
+    <div class="panel" style="padding:10px">
+      <iframe src="https://dexscreener.com/robinhood/${pair}?embed=1&theme=${document.body.dataset.theme === "light" ? "light" : "dark"}&info=0" style="width:100%;height:640px;border:0;border-radius:12px" title="chart"></iframe>
+    </div>
+    <div style="margin-top:12px;display:flex;gap:10px">
+      <a class="btn" style="text-decoration:none" href="https://dexscreener.com/robinhood/${pair}" target="_blank" rel="noopener">trade ↗</a>
+      <a class="btn ghost" style="text-decoration:none" href="/">launch your own on robn.fun 🏹</a>
+    </div></div>`;
 }
 
 async function renderStats() {
@@ -523,6 +600,10 @@ async function init() {
     document.querySelector(".feed").style.display = "none";
     renderTokenPage();
     setInterval(async () => { await loadTokens(); renderTokenPage(true); }, 20000);
+  } else if (trenchPage) {
+    renderTrenches();
+  } else if (xPair) {
+    renderExternalToken(xPair);
   } else if (statsPage) {
     renderStats();
     setInterval(renderStats, 30000);
