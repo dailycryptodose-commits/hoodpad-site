@@ -1184,6 +1184,7 @@ async function fillTradePanel(t) {
     ${t.migrated
       ? `<div class="note">this token has graduated — trade it on uniswap. chart above is live from dexscreener.</div>`
       : `<div style="margin-bottom:12px"><button class="btn ghost" style="width:100%;font-size:12px;padding:8px" onclick="${turbo.wallet ? "openTurbo()" : "enableTurbo()"}">${turbo.on ? "⚡ 1-click ON · " + Number(E.formatEther(ethBal || 0n)).toFixed(4) + " ETH · manage" : "⚡ enable 1-click trading"}</button></div>
+         ${turbo.on && (ethBal === null || ethBal < E.parseEther("0.002")) ? `<div class="note" style="border:1px solid var(--red);color:var(--red);margin-bottom:12px;cursor:pointer" onclick="openTurbo()">⚡ your trading wallet is empty — tap here to deposit eth (or turn 1-click off to use your main wallet)</div>` : ""}
          <div class="tradeTabs">
            <button class="tradeTab ${buying ? "onBuy" : ""}" onclick="setTradeTab('buy')">Buy</button>
            <button class="tradeTab ${buying ? "" : "onSell"}" onclick="setTradeTab('sell')">Sell</button>
