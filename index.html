@@ -1711,6 +1711,28 @@ async function connect() {
   $("connectBtn").textContent = short(wallet);
   if (pageToken && currentToken) fillTradePanel(currentToken);
 }
+async function ensureChain() {
+  if (!window.ethereum) return true; // turbo/rpc paths don't go through the wallet
+  try {
+    const id = await window.ethereum.request({ method: "eth_chainId" });
+    if (parseInt(id, 16) === 4663) return true;
+    toast("switching to robinhood chain…");
+    try {
+      await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x1237" }] });
+      return true;
+    } catch (e) {
+      if (e && e.code === 4902) {
+        try {
+          await window.ethereum.request({ method: "wallet_addEthereumChain", params: [{ chainId: "0x1237", chainName: "Robinhood Chain", nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 }, rpcUrls: [RPC], blockExplorerUrls: [EXPLORER] }] });
+          return true;
+        } catch (e2) {}
+      }
+      toast("please switch your wallet to robinhood chain");
+      return false;
+    }
+  } catch (e) { return true; } // never block trading on a failed check
+}
+
 async function needWallet() {
   if (!signer) await connect();
   if (signer && !(await ensureChain())) return false;
